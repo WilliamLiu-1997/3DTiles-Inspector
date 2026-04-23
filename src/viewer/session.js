@@ -742,14 +742,14 @@ function buildViewerHtml(viewerConfig) {
 
       .toolbar-dock {
         position: fixed;
-        top: 16px;
-        bottom: 16px;
-        left: 16px;
+        top: 14px;
+        bottom: 14px;
+        left: 14px;
         display: grid;
         grid-template-rows: auto minmax(0, 1fr);
         align-items: stretch;
         gap: 0;
-        width: min(280px, calc(100vw - 32px));
+        width: min(280px, calc(100vw - 28px));
         z-index: 10;
       }
 
@@ -947,13 +947,18 @@ function buildViewerHtml(viewerConfig) {
 
       .coordinate-grid label {
         display: grid;
-        gap: 6px;
+        grid-template-columns: 78px minmax(0, 1fr);
+        align-items: center;
         min-width: 0;
         font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.04em;
         text-transform: uppercase;
         color: #5d738b;
+      }
+
+      .coordinate-grid label span {
+        min-width: 0;
       }
 
       .coordinate-grid input {
@@ -1079,6 +1084,7 @@ function buildViewerHtml(viewerConfig) {
           </div>
           <div class="coordinate-actions">
             <button id="terrain" class="wide" type="button">Terrain</button>
+            <button id="bounding-volume" class="wide" type="button">Bounding Volume</button>
             <button id="move-to-tiles" type="button">Move To Tiles</button>
           </div>
         </div>
@@ -1087,9 +1093,9 @@ function buildViewerHtml(viewerConfig) {
             <p class="toolbar-section-title">Coordinate</p>
           </div>
           <div class="coordinate-grid">
-            <label>Lat <input id="latitude" type="number" step="any" value="0" /></label>
-            <label>Lon <input id="longitude" type="number" step="any" value="0" /></label>
-            <label>Height <input id="height" type="number" step="any" value="0" /></label>
+            <label><span>Latitude</span><input id="latitude" type="number" step="any" value="0" /></label>
+            <label><span>Longitude</span><input id="longitude" type="number" step="any" value="0" /></label>
+            <label><span>Height</span><input id="height" type="number" step="any" value="0" /></label>
           </div>
           <div class="coordinate-actions">
             <button id="move-tiles-to-coordinate" class="wide" type="button">Move Tiles</button>

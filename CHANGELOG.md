@@ -6,6 +6,16 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-04-24
+
+### Added
+
+- `Bounding Volume` toolbar toggle backed by `DebugTilesPlugin` to show tileset box, sphere, and region bounds.
+
+### Changed
+
+- Moved `Latitude`, `Longitude`, and `Height` labels to the left side of the coordinate inputs and expanded the shortened labels.
+
 ## [0.1.1] - 2026-04-23
 
 ### Changed

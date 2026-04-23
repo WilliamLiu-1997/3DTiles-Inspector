@@ -24,6 +24,7 @@ import {
 } from '3d-tiles-renderer/plugins';
 import {
   CesiumIonAuthPlugin,
+  DebugTilesPlugin,
   ImageOverlayPlugin,
   QuantizedMeshPlugin,
   XYZTilesOverlay,
@@ -85,6 +86,7 @@ const translateButton = document.getElementById('translate');
 const rotateButton = document.getElementById('rotate');
 const moveToTilesButton = document.getElementById('move-to-tiles');
 const terrainButton = document.getElementById('terrain');
+const boundingVolumeButton = document.getElementById('bounding-volume');
 const latitudeInput = document.getElementById('latitude');
 const longitudeInput = document.getElementById('longitude');
 const heightInput = document.getElementById('height');
@@ -482,6 +484,8 @@ let pendingSetPosition = false;
 let syncingTransformHandle = false;
 let tilesTransformDirty = false;
 let lastRuntimeStatsUpdateTime = -Infinity;
+let showBoundingVolume = false;
+let debugTilesPlugin = null;
 
 function getActiveEllipsoid() {
   return tiles?.ellipsoid || globeTiles?.ellipsoid || null;
@@ -597,6 +601,10 @@ function syncTerrainButton() {
   terrainLight.visible = terrainEnabled;
 }
 
+function syncBoundingVolumeButton() {
+  boundingVolumeButton?.classList.toggle('active', showBoundingVolume);
+}
+
 function syncToolbarVisibility() {
   const sidebarLabel = toolbarVisible ? 'Hide Sidebar' : 'Show Sidebar';
   toolbarDockEl.classList.toggle('expanded', toolbarVisible);
@@ -610,6 +618,32 @@ function syncToolbarVisibility() {
 function toggleToolbarVisibility() {
   toolbarVisible = !toolbarVisible;
   syncToolbarVisibility();
+}
+
+function applyBoundingVolumeVisibility() {
+  if (!debugTilesPlugin) {
+    return;
+  }
+
+  debugTilesPlugin.displayBoxBounds = showBoundingVolume;
+  debugTilesPlugin.displaySphereBounds = showBoundingVolume;
+  debugTilesPlugin.displayRegionBounds = showBoundingVolume;
+  debugTilesPlugin.update();
+}
+
+function setBoundingVolumeVisible(visible) {
+  showBoundingVolume = visible;
+  syncBoundingVolumeButton();
+  applyBoundingVolumeVisibility();
+}
+
+function toggleBoundingVolume() {
+  setBoundingVolumeVisible(!showBoundingVolume);
+  setStatus(
+    showBoundingVolume
+      ? 'Bounding volumes enabled.'
+      : 'Bounding volumes disabled.',
+  );
 }
 
 function setTerrainEnabled(enabled) {
@@ -663,6 +697,7 @@ setGeometricErrorScaleExponent(geometricErrorScaleExponent);
 setTerrainEnabled(terrainEnabled);
 setTransformMode(activeTransformMode);
 syncToolbarVisibility();
+syncBoundingVolumeButton();
 
 function applySavedMatrix(matrix) {
   composeMatrix(editableGroup, matrix);
@@ -1273,6 +1308,7 @@ function loadTileset(url) {
     editableGroup.remove(tiles.group);
     tiles.dispose();
     tiles = null;
+    debugTilesPlugin = null;
   }
 
   updateRuntimeStats(true);
@@ -1303,6 +1339,12 @@ function loadTileset(url) {
   next.registerPlugin(new UnloadTilesPlugin());
   next.registerPlugin(new ImplicitTilingPlugin());
   next.registerPlugin(new GaussianSplatPlugin({ renderer, scene }));
+  debugTilesPlugin = new DebugTilesPlugin({
+    displayBoxBounds: showBoundingVolume,
+    displaySphereBounds: showBoundingVolume,
+    displayRegionBounds: showBoundingVolume,
+  });
+  next.registerPlugin(debugTilesPlugin);
   next.registerPlugin(
     new GLTFExtensionsPlugin({
       metadata: true,
@@ -1318,6 +1360,7 @@ function loadTileset(url) {
   next.setResolutionFromRenderer(camera, renderer);
   tiles = next;
   updateTilesetErrorTarget();
+  applyBoundingVolumeVisibility();
   next.addEventListener('load-model', ({ scene: modelScene }) => {
     forceOpaqueScene(modelScene);
     tilesTransformDirty = true;
@@ -1441,6 +1484,7 @@ terrainButton.addEventListener('click', () => {
       : 'Terrain disabled. Using ellipsoid imagery globe.',
   );
 });
+boundingVolumeButton.addEventListener('click', toggleBoundingVolume);
 geometricErrorScaleInput.addEventListener('input', () => {
   setGeometricErrorScaleExponent(geometricErrorScaleInput.value);
 });
