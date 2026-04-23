@@ -28,7 +28,10 @@ import {
   QuantizedMeshPlugin,
   XYZTilesOverlay,
 } from '3d-tiles-renderer/three/plugins';
-import { GaussianSplatPlugin } from '3d-tiles-rendererjs-3dgs-plugin';
+import {
+  GaussianSplatPlugin,
+  isGaussianSplatScene,
+} from '3d-tiles-rendererjs-3dgs-plugin';
 import { Ion } from 'cesium';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
@@ -73,6 +76,8 @@ const MOVE_TO_TILES_ROLL = 0;
 const MOVE_TO_COORDINATE_RADIUS = 10;
 
 const statusEl = document.getElementById('status');
+const cacheBytesValueEl = document.getElementById('cache-bytes-value');
+const splatsCountValueEl = document.getElementById('splats-count-value');
 const toolbarEl = document.getElementById('toolbar');
 const toolbarDockEl = toolbarEl.parentElement;
 const toolbarToggleButton = document.getElementById('toolbar-toggle');
@@ -101,6 +106,7 @@ const GEOMETRIC_ERROR_SCALE_MAX_EXPONENT = 4;
 const GEOMETRIC_ERROR_SCALE_STEP = 0.1;
 const DEFAULT_ERROR_TARGET = 6;
 const DEFAULT_TERRAIN_ERROR_TARGET = 2;
+const RUNTIME_STATS_UPDATE_INTERVAL_MS = 250;
 
 function normalizeLocalResourceUrl(value) {
   if (typeof value !== 'string' || value.length === 0) {
@@ -255,6 +261,28 @@ function formatGeometricErrorScale(value) {
   }
 
   return value.toFixed(2);
+}
+
+function formatBytes(value) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let next = Math.max(0, Number(value) || 0);
+  let unitIndex = 0;
+
+  while (next >= 1024 && unitIndex < units.length - 1) {
+    next /= 1024;
+    unitIndex++;
+  }
+
+  if (unitIndex === 0) {
+    return `${Math.round(next)} ${units[unitIndex]}`;
+  }
+
+  const digits = next >= 100 ? 0 : next >= 10 ? 1 : 2;
+  return `${next.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function formatInteger(value) {
+  return Math.max(0, Math.round(Number(value) || 0)).toLocaleString('en-US');
 }
 
 function setRaycasterFromCamera(raycaster, coords, camera) {
@@ -453,6 +481,7 @@ let savedRootMatrixLoadError = null;
 let pendingSetPosition = false;
 let syncingTransformHandle = false;
 let tilesTransformDirty = false;
+let lastRuntimeStatsUpdateTime = -Infinity;
 
 function getActiveEllipsoid() {
   return tiles?.ellipsoid || globeTiles?.ellipsoid || null;
@@ -470,6 +499,83 @@ function updateGeometricErrorScaleDisplay() {
   geometricErrorValueEl.textContent = `x${formatGeometricErrorScale(
     geometricErrorScale,
   )}`;
+}
+
+function getGaussianMeshSplatCount(mesh) {
+  if (!mesh || typeof mesh !== 'object') {
+    return 0;
+  }
+
+  const directCount =
+    mesh.extSplats?.getNumSplats?.() ??
+    mesh.extSplats?.numSplats ??
+    mesh.packedSplats?.getNumSplats?.() ??
+    mesh.packedSplats?.numSplats ??
+    mesh.splats?.getNumSplats?.();
+
+  return Number.isFinite(directCount) ? directCount : 0;
+}
+
+function getLoadedGaussianSplatCount() {
+  if (!tiles || typeof tiles.forEachLoadedModel !== 'function') {
+    return 0;
+  }
+
+  let total = 0;
+  tiles.forEachLoadedModel((loadedScene) => {
+    if (!loadedScene?.visible || !isGaussianSplatScene(loadedScene)) {
+      return;
+    }
+
+    const meshes = loadedScene.userData.gaussianSplatMeshes || [];
+    for (const mesh of meshes) {
+      total += getGaussianMeshSplatCount(mesh);
+    }
+  });
+
+  return total;
+}
+
+function getActiveSparkSplatsCount() {
+  let count = null;
+
+  scene.traverse((node) => {
+    if (count !== null || node?.visible === false) {
+      return;
+    }
+
+    const activeSplats = node?.activeSplats;
+    if (
+      Number.isFinite(activeSplats) &&
+      typeof node?.clearSplats === 'function' &&
+      typeof node?.render === 'function'
+    ) {
+      count = activeSplats;
+    }
+  });
+
+  return count;
+}
+
+function updateRuntimeStats(force = false) {
+  if (!cacheBytesValueEl || !splatsCountValueEl) {
+    return;
+  }
+
+  const now = performance.now();
+  if (!force && now - lastRuntimeStatsUpdateTime < RUNTIME_STATS_UPDATE_INTERVAL_MS) {
+    return;
+  }
+
+  lastRuntimeStatsUpdateTime = now;
+
+  const cacheBytes = tiles?.lruCache?.cachedBytes ?? 0;
+  const activeSparkSplats = getActiveSparkSplatsCount();
+  const splatCount =
+    activeSparkSplats !== null ? activeSparkSplats : getLoadedGaussianSplatCount();
+
+  cacheBytesValueEl.textContent = formatBytes(cacheBytes);
+  splatsCountValueEl.textContent = formatInteger(splatCount);
 }
 
 function setGeometricErrorScaleExponent(exponent) {
@@ -1169,6 +1275,8 @@ function loadTileset(url) {
     tiles = null;
   }
 
+  updateRuntimeStats(true);
+
   resetEditableGroup();
   lastSavedGeometricErrorScale = 1;
   savedRootMatrix.identity();
@@ -1383,6 +1491,7 @@ function frame() {
   globeTiles?.update();
   tiles?.update();
   renderer.render(scene, camera);
+  updateRuntimeStats();
   requestAnimationFrame(frame);
 }
 

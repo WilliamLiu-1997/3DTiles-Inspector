@@ -18,6 +18,7 @@
     "src/",
     "dist/inspector-assets/",
     "bin/",
+    "3DTiles-Inspector.png",
     "CHANGELOG.md",
     "LICENSE",
     "README.md"

@@ -694,6 +694,48 @@ function buildViewerHtml(viewerConfig) {
         inset: 0;
       }
 
+      .runtime-stats {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 10px;
+        max-width: min(420px, calc(100vw - 32px));
+        z-index: 12;
+        pointer-events: none;
+      }
+
+      .runtime-stat {
+        display: grid;
+        gap: 4px;
+        min-width: 132px;
+        padding: 8px 12px;
+        border: 1px solid rgba(22, 50, 79, 0.1);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: 0 14px 32px rgba(33, 52, 73, 0.12);
+        backdrop-filter: blur(14px);
+      }
+
+      .runtime-stat-label {
+        margin: 0;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #5d738b;
+      }
+
+      .runtime-stat-value {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 700;
+        line-height: 1.1;
+        color: #16324f;
+      }
+
       canvas {
         display: block;
       }
@@ -964,6 +1006,19 @@ function buildViewerHtml(viewerConfig) {
       }
 
       @media (max-width: 720px) {
+        .runtime-stats {
+          top: 16px;
+          right: 16px;
+          left: 16px;
+          justify-content: stretch;
+          max-width: none;
+        }
+
+        .runtime-stat {
+          flex: 1 1 140px;
+          min-width: 0;
+        }
+
         .toolbar-dock {
           top: auto;
           bottom: 16px;
@@ -986,6 +1041,16 @@ function buildViewerHtml(viewerConfig) {
   </head>
   <body>
     <div id="app"></div>
+    <div class="runtime-stats" aria-live="polite">
+      <div class="runtime-stat">
+        <p class="runtime-stat-label">CacheBytes</p>
+        <p id="cache-bytes-value" class="runtime-stat-value">0 B</p>
+      </div>
+      <div class="runtime-stat">
+        <p class="runtime-stat-label">splatsNumber</p>
+        <p id="splats-count-value" class="runtime-stat-value">0</p>
+      </div>
+    </div>
     <div class="toolbar-dock expanded">
       <button
         id="toolbar-toggle"

@@ -1,6 +1,12 @@
 # 3DTiles-Inspector
 
+[![npm version](https://img.shields.io/npm/v/3dtiles-inspector)](https://www.npmjs.com/package/3dtiles-inspector)
+[![CI](https://github.com/WilliamLiu-1997/3DTiles-Inspector/actions/workflows/ci.yml/badge.svg)](https://github.com/WilliamLiu-1997/3DTiles-Inspector/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 `3dtiles-inspector` is a Node.js package and CLI for opening a local 3D Tiles tileset in a browser inspector, adjusting the root transform, tuning the effective geometric error scale, and saving the result back to disk.
+
+<img src="https://raw.githubusercontent.com/WilliamLiu-1997/3DTiles-Inspector/main/3DTiles-Inspector.png" alt="3DTiles-Inspector" width="960" />
 
 Requires Node.js 18 or newer.
 
