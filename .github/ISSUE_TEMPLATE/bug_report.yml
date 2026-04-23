@@ -1,0 +1,65 @@
+name: Bug report
+description: Report a reproducible defect in the viewer CLI, local server, or interactive session.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please include the command you ran, the environment, and enough context to reproduce the problem.
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: The npm package version or commit you are using.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: node_version
+    attributes:
+      label: Node.js version
+      placeholder: 22.22.2
+    validations:
+      required: true
+  - type: dropdown
+    id: usage_mode
+    attributes:
+      label: Usage mode
+      options:
+        - CLI
+        - Node API
+        - Both
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command or code snippet
+      render: bash
+      placeholder: 3dtiles-inspector out_tiles
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output or logs
+      render: text
+  - type: textarea
+    id: sample_data
+    attributes:
+      label: Tileset details
+      description: Describe the tileset structure, nested tilesets, external content, or link to a minimal repro dataset if you can share one.

@@ -1,0 +1,63 @@
+{
+  "name": "3dtiles-inspector",
+  "version": "0.1.0",
+  "description": "Inspect, align, and save local 3D Tiles root transforms in an interactive browser session.",
+  "author": "William Liu <lyz15972107087@gmail.com>",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./cli": "./src/cli.js",
+    "./session": "./src/viewer/session.js"
+  },
+  "bin": {
+    "3dtiles-inspector": "bin/3dtiles-inspector.js"
+  },
+  "files": [
+    "src/",
+    "dist/inspector-assets/",
+    "bin/",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node ./test/smoke.js",
+    "build:viewer": "node ./scripts/build-viewer.js",
+    "prepare": "npm run build:viewer",
+    "cli": "node ./bin/3dtiles-inspector.js",
+    "pack:check": "npm pack --dry-run",
+    "release:check": "npm test && npm run pack:check"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "packageManager": "npm@10.9.7",
+  "keywords": [
+    "3d-tiles",
+    "3dtiles",
+    "inspector",
+    "viewer",
+    "tileset",
+    "cesium",
+    "gaussian-splatting",
+    "3dgs"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WilliamLiu-1997/3DTiles-Inspector.git"
+  },
+  "homepage": "https://github.com/WilliamLiu-1997/3DTiles-Inspector#readme",
+  "bugs": {
+    "url": "https://github.com/WilliamLiu-1997/3DTiles-Inspector/issues"
+  },
+  "devDependencies": {
+    "@sparkjsdev/spark": "2.0.0",
+    "3d-tiles-renderer": "0.4.24",
+    "3d-tiles-rendererjs-3dgs-plugin": "0.1.4",
+    "cesium": "1.140.0",
+    "esbuild": "^0.25.11",
+    "three": "0.180.0"
+  }
+}
