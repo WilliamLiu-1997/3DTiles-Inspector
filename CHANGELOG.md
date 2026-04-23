@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-23
+
+### Changed
+
+- Follow-up patch release after `0.1.0` had already been published to npm.
+- No functional changes beyond the package version metadata.
+
 ## [0.1.0] - 2026-04-23
 
 ### Added
