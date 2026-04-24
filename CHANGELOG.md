@@ -6,6 +6,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-04-25
+
+### Fixed
+
+- Reset the `Geometric Error` slider to the center after `Save` while keeping the newly applied LOD scale active.
+
 ## [0.1.2] - 2026-04-24
 
 ### Added

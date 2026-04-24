@@ -496,13 +496,18 @@ function updateTilesetErrorTarget() {
     return;
   }
 
-  tiles.errorTarget = DEFAULT_ERROR_TARGET / geometricErrorScale;
+  tiles.errorTarget =
+    DEFAULT_ERROR_TARGET / getEffectiveGeometricErrorScale();
 }
 
 function updateGeometricErrorScaleDisplay() {
   geometricErrorValueEl.textContent = `x${formatGeometricErrorScale(
     geometricErrorScale,
   )}`;
+}
+
+function getEffectiveGeometricErrorScale() {
+  return lastSavedGeometricErrorScale * geometricErrorScale;
 }
 
 function getGaussianMeshSplatCount(mesh) {
@@ -1315,6 +1320,7 @@ function loadTileset(url) {
 
   resetEditableGroup();
   lastSavedGeometricErrorScale = 1;
+  setGeometricErrorScaleExponent(0);
   savedRootMatrix.identity();
   savedRootMatrixLoadError = null;
   savedRootMatrixPromise = refreshSavedRootMatrix(url).then(
@@ -1402,8 +1408,8 @@ async function saveTransform() {
   const incrementalMatrix = currentMatrix
     .clone()
     .multiply(lastSavedMatrix.clone().invert());
-  const incrementalGeometricErrorScale =
-    geometricErrorScale / lastSavedGeometricErrorScale;
+  const incrementalGeometricErrorScale = geometricErrorScale;
+  const savedGeometricErrorScale = getEffectiveGeometricErrorScale();
 
   try {
     const response = await fetch(SAVE_URL, {
@@ -1441,13 +1447,14 @@ async function saveTransform() {
         throw savedRootMatrixLoadError;
       }
     }
-    lastSavedGeometricErrorScale = geometricErrorScale;
+    lastSavedGeometricErrorScale = savedGeometricErrorScale;
     lastSavedMatrix.copy(currentMatrix);
+    setGeometricErrorScaleExponent(0);
     syncTransformHandleFromTilesTransform();
     syncCoordinateInputsFromTilesTransform();
     setStatus(
       `Saved transform and geometric-error scale x${formatGeometricErrorScale(
-        geometricErrorScale,
+        savedGeometricErrorScale,
       )} to ${ROOT_TILESET_LABEL} and build_summary.json.`,
     );
   } catch (err) {
