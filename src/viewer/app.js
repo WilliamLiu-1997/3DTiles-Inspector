@@ -106,8 +106,8 @@ const saveButton = document.getElementById('save');
 const GEOMETRIC_ERROR_SCALE_MIN_EXPONENT = -4;
 const GEOMETRIC_ERROR_SCALE_MAX_EXPONENT = 4;
 const GEOMETRIC_ERROR_SCALE_STEP = 0.1;
-const DEFAULT_ERROR_TARGET = 6;
-const DEFAULT_TERRAIN_ERROR_TARGET = 2;
+const DEFAULT_ERROR_TARGET = 16;
+const DEFAULT_TERRAIN_ERROR_TARGET = 16;
 const RUNTIME_STATS_UPDATE_INTERVAL_MS = 250;
 
 function normalizeLocalResourceUrl(value) {
@@ -496,8 +496,7 @@ function updateTilesetErrorTarget() {
     return;
   }
 
-  tiles.errorTarget =
-    DEFAULT_ERROR_TARGET / getEffectiveGeometricErrorScale();
+  tiles.errorTarget = DEFAULT_ERROR_TARGET / getEffectiveGeometricErrorScale();
 }
 
 function updateGeometricErrorScaleDisplay() {
@@ -572,7 +571,10 @@ function updateRuntimeStats(force = false) {
   }
 
   const now = performance.now();
-  if (!force && now - lastRuntimeStatsUpdateTime < RUNTIME_STATS_UPDATE_INTERVAL_MS) {
+  if (
+    !force &&
+    now - lastRuntimeStatsUpdateTime < RUNTIME_STATS_UPDATE_INTERVAL_MS
+  ) {
     return;
   }
 
@@ -581,7 +583,9 @@ function updateRuntimeStats(force = false) {
   const cacheBytes = tiles?.lruCache?.cachedBytes ?? 0;
   const activeSparkSplats = getActiveSparkSplatsCount();
   const splatCount =
-    activeSparkSplats !== null ? activeSparkSplats : getLoadedGaussianSplatCount();
+    activeSparkSplats !== null
+      ? activeSparkSplats
+      : getLoadedGaussianSplatCount();
 
   cacheBytesValueEl.textContent = formatBytes(cacheBytes);
   splatsCountValueEl.textContent = formatInteger(splatCount);

@@ -6,6 +6,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-04-25
+
+### Changed
+
+- Raised the default tileset and terrain geometric-error targets to `16` for more consistent LOD behavior.
+
 ## [0.1.3] - 2026-04-25
 
 ### Fixed
