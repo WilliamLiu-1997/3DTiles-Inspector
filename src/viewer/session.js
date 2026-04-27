@@ -184,10 +184,153 @@ function scaleGeometricErrorValue(target, key, scale, label) {
     throw new InspectorError(`${label} must be a finite number.`);
   }
 
-  target[key] = number * scale;
+  const next = number * scale;
+  if (!Number.isFinite(next)) {
+    throw new InspectorError(`${label} scaled value must be finite.`);
+  }
+
+  target[key] = next;
 }
 
-function scaleTilesetGeometricErrors(tile, scale, pathLabel = 'tileset.root') {
+function getGeometricErrorScaleForLeafDistance(
+  geometricErrorScale,
+  geometricErrorLayerScale,
+  leafDistance,
+  label,
+) {
+  const scale =
+    geometricErrorScale * geometricErrorLayerScale ** Math.max(0, leafDistance);
+  if (!Number.isFinite(scale)) {
+    throw new InspectorError(`${label} scale must be a finite number.`);
+  }
+  return scale;
+}
+
+function assertTilesetPathInsideRoot(resolvedPath, rootDir) {
+  if (
+    resolvedPath !== rootDir &&
+    !resolvedPath.startsWith(`${rootDir}${path.sep}`)
+  ) {
+    throw new InspectorError(
+      `Nested tileset path escapes the viewer root: ${resolvedPath}`,
+    );
+  }
+}
+
+function getLocalExternalTilesetPaths(tile, baseDir) {
+  const paths = [];
+  if (!tile || typeof tile !== 'object') {
+    return paths;
+  }
+
+  if (tile.content && typeof tile.content === 'object') {
+    const filePath = getLocalJsonReferencePath(
+      baseDir,
+      tile.content.uri || tile.content.url,
+    );
+    if (filePath) {
+      paths.push(filePath);
+    }
+  }
+
+  if (Array.isArray(tile.contents)) {
+    tile.contents.forEach((entry) => {
+      if (entry && typeof entry === 'object') {
+        const filePath = getLocalJsonReferencePath(
+          baseDir,
+          entry.uri || entry.url,
+        );
+        if (filePath) {
+          paths.push(filePath);
+        }
+      }
+    });
+  }
+
+  return paths;
+}
+
+function getTilesetRootLeafDistance(
+  tilesetPath,
+  rootDir,
+  leafDistanceCache,
+  stack,
+) {
+  const resolvedPath = path.resolve(tilesetPath);
+  if (leafDistanceCache.has(resolvedPath)) {
+    return leafDistanceCache.get(resolvedPath);
+  }
+
+  if (stack.has(resolvedPath)) {
+    return 0;
+  }
+
+  assertTilesetPathInsideRoot(resolvedPath, rootDir);
+
+  if (!fs.existsSync(resolvedPath)) {
+    throw new InspectorError(
+      `Referenced nested tileset does not exist: ${resolvedPath}`,
+    );
+  }
+
+  const tileset = readJsonFile(resolvedPath);
+  if (!tileset || typeof tileset !== 'object' || !tileset.root) {
+    throw new InspectorError(`${resolvedPath} must contain a root object.`);
+  }
+
+  stack.add(resolvedPath);
+  const leafDistance = getTileLeafDistance(
+    tileset.root,
+    path.dirname(resolvedPath),
+    rootDir,
+    leafDistanceCache,
+    stack,
+  );
+  stack.delete(resolvedPath);
+  leafDistanceCache.set(resolvedPath, leafDistance);
+  return leafDistance;
+}
+
+function getTileLeafDistance(tile, baseDir, rootDir, leafDistanceCache, stack) {
+  if (!tile || typeof tile !== 'object') {
+    return 0;
+  }
+
+  let maxDistance = 0;
+  if (Array.isArray(tile.children)) {
+    tile.children.forEach((child) => {
+      maxDistance = Math.max(
+        maxDistance,
+        getTileLeafDistance(child, baseDir, rootDir, leafDistanceCache, stack) +
+          1,
+      );
+    });
+  }
+
+  getLocalExternalTilesetPaths(tile, baseDir).forEach((childTilesetPath) => {
+    maxDistance = Math.max(
+      maxDistance,
+      getTilesetRootLeafDistance(
+        childTilesetPath,
+        rootDir,
+        leafDistanceCache,
+        stack,
+      ) + 1,
+    );
+  });
+
+  return maxDistance;
+}
+
+function scaleTilesetGeometricErrors(
+  tile,
+  geometricErrorScale,
+  geometricErrorLayerScale,
+  baseDir,
+  rootDir,
+  leafDistanceCache,
+  pathLabel = 'tileset.root',
+) {
   if (!tile || typeof tile !== 'object') {
     return;
   }
@@ -195,7 +338,12 @@ function scaleTilesetGeometricErrors(tile, scale, pathLabel = 'tileset.root') {
   scaleGeometricErrorValue(
     tile,
     'geometricError',
-    scale,
+    getGeometricErrorScaleForLeafDistance(
+      geometricErrorScale,
+      geometricErrorLayerScale,
+      getTileLeafDistance(tile, baseDir, rootDir, leafDistanceCache, new Set()),
+      pathLabel,
+    ),
     `${pathLabel}.geometricError`,
   );
 
@@ -206,7 +354,11 @@ function scaleTilesetGeometricErrors(tile, scale, pathLabel = 'tileset.root') {
   tile.children.forEach((child, index) => {
     scaleTilesetGeometricErrors(
       child,
-      scale,
+      geometricErrorScale,
+      geometricErrorLayerScale,
+      baseDir,
+      rootDir,
+      leafDistanceCache,
       `${pathLabel}.children[${index}]`,
     );
   });
@@ -234,27 +386,8 @@ function collectExternalTilesetPaths(tile, baseDir, results) {
     return;
   }
 
-  const maybePaths = [];
-  if (tile.content && typeof tile.content === 'object') {
-    maybePaths.push(
-      getLocalJsonReferencePath(baseDir, tile.content.uri || tile.content.url),
-    );
-  }
-
-  if (Array.isArray(tile.contents)) {
-    tile.contents.forEach((entry) => {
-      if (entry && typeof entry === 'object') {
-        maybePaths.push(
-          getLocalJsonReferencePath(baseDir, entry.uri || entry.url),
-        );
-      }
-    });
-  }
-
-  maybePaths.forEach((filePath) => {
-    if (filePath) {
-      results.add(filePath);
-    }
+  getLocalExternalTilesetPaths(tile, baseDir).forEach((filePath) => {
+    results.add(filePath);
   });
 
   if (!Array.isArray(tile.children)) {
@@ -268,7 +401,13 @@ function collectExternalTilesetPaths(tile, baseDir, results) {
 
 function updateTilesetJsonFile(
   tilesetPath,
-  { geometricErrorScale, rootDir, rootTransform = null },
+  {
+    geometricErrorLayerScale,
+    geometricErrorScale,
+    rootDir,
+    rootTransform = null,
+    leafDistanceCache = new Map(),
+  },
   visited = new Set(),
 ) {
   const resolvedPath = path.resolve(tilesetPath);
@@ -277,14 +416,7 @@ function updateTilesetJsonFile(
   }
   visited.add(resolvedPath);
 
-  if (
-    resolvedPath !== rootDir &&
-    !resolvedPath.startsWith(`${rootDir}${path.sep}`)
-  ) {
-    throw new InspectorError(
-      `Nested tileset path escapes the viewer root: ${resolvedPath}`,
-    );
-  }
+  assertTilesetPathInsideRoot(resolvedPath, rootDir);
 
   if (!fs.existsSync(resolvedPath)) {
     throw new InspectorError(
@@ -301,30 +433,44 @@ function updateTilesetJsonFile(
     tileset.root.transform = rootTransform.slice();
   }
 
+  const tilesetDir = path.dirname(resolvedPath);
   scaleGeometricErrorValue(
     tileset,
     'geometricError',
-    geometricErrorScale,
+    getGeometricErrorScaleForLeafDistance(
+      geometricErrorScale,
+      geometricErrorLayerScale,
+      getTileLeafDistance(
+        tileset.root,
+        tilesetDir,
+        rootDir,
+        leafDistanceCache,
+        new Set(),
+      ),
+      resolvedPath,
+    ),
     `${resolvedPath}.geometricError`,
   );
   scaleTilesetGeometricErrors(
     tileset.root,
     geometricErrorScale,
+    geometricErrorLayerScale,
+    tilesetDir,
+    rootDir,
+    leafDistanceCache,
     `${resolvedPath}.root`,
   );
   writeJsonAtomic(resolvedPath, tileset);
 
   const nestedTilesets = new Set();
-  collectExternalTilesetPaths(
-    tileset.root,
-    path.dirname(resolvedPath),
-    nestedTilesets,
-  );
+  collectExternalTilesetPaths(tileset.root, tilesetDir, nestedTilesets);
   nestedTilesets.forEach((childTilesetPath) => {
     updateTilesetJsonFile(
       childTilesetPath,
       {
+        geometricErrorLayerScale,
         geometricErrorScale,
+        leafDistanceCache,
         rootDir,
       },
       visited,
@@ -337,12 +483,16 @@ function updateTilesetJsonFile(
 function saveViewerTransform(
   rootTilesetPath,
   editMatrix,
-  { geometricErrorScale = 1 } = {},
+  { geometricErrorLayerScale = 1, geometricErrorScale = 1 } = {},
 ) {
   const normalizedEdit = normalizeMatrix4Array(editMatrix, 'transform');
   const normalizedGeometricErrorScale = normalizePositiveFinite(
     geometricErrorScale,
     'geometricErrorScale',
+  );
+  const normalizedGeometricErrorLayerScale = normalizePositiveFinite(
+    geometricErrorLayerScale,
+    'geometricErrorLayerScale',
   );
   const tilesetPath = path.resolve(rootTilesetPath);
   const rootDir = path.dirname(tilesetPath);
@@ -366,6 +516,7 @@ function saveViewerTransform(
   const nextRoot = multiplyMatrix4(normalizedEdit, currentRoot);
 
   updateTilesetJsonFile(tilesetPath, {
+    geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
     geometricErrorScale: normalizedGeometricErrorScale,
     rootDir,
     rootTransform: nextRoot,
@@ -386,6 +537,15 @@ function saveViewerTransform(
     summary.root_coordinate = null;
     summary.viewer_geometric_error_scale =
       previousGeometricErrorScale * normalizedGeometricErrorScale;
+    const previousGeometricErrorLayerScale =
+      summary.viewer_geometric_error_layer_scale == null
+        ? 1
+        : normalizePositiveFinite(
+            summary.viewer_geometric_error_layer_scale,
+            'build_summary.viewer_geometric_error_layer_scale',
+          );
+    summary.viewer_geometric_error_layer_scale =
+      previousGeometricErrorLayerScale * normalizedGeometricErrorLayerScale;
     writeJsonAtomic(summaryPath, summary);
   }
 
@@ -529,9 +689,28 @@ async function handleSaveTransformRequest(rootTilesetPath, req, res) {
     return;
   }
 
+  let normalizedGeometricErrorLayerScale;
+  try {
+    normalizedGeometricErrorLayerScale = normalizePositiveFinite(
+      payload.geometricErrorLayerScale == null
+        ? 1
+        : payload.geometricErrorLayerScale,
+      'geometricErrorLayerScale',
+    );
+  } catch (err) {
+    sendJson(res, 400, {
+      error:
+        err instanceof Error && err.message
+          ? err.message
+          : 'geometricErrorLayerScale must be a finite number greater than 0.',
+    });
+    return;
+  }
+
   let nextRoot;
   try {
     nextRoot = saveViewerTransform(rootTilesetPath, normalizedEdit, {
+      geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
       geometricErrorScale: normalizedGeometricErrorScale,
     });
   } catch (err) {
@@ -547,6 +726,7 @@ async function handleSaveTransformRequest(rootTilesetPath, req, res) {
   sendJson(res, 200, {
     ok: true,
     transform: nextRoot,
+    geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
     geometricErrorScale: normalizedGeometricErrorScale,
   });
 }
@@ -756,7 +936,7 @@ function buildViewerHtml(viewerConfig) {
       .toolbar {
         display: grid;
         align-content: start;
-        gap: 12px;
+        gap: 10px;
         padding: 14px;
         border: 1px solid rgba(22, 50, 79, 0.12);
         border-top: 0;
@@ -782,7 +962,7 @@ function buildViewerHtml(viewerConfig) {
         justify-content: center;
         width: 100%;
         min-height: 32px;
-        padding: 10px 12px;
+        padding: 8px 12px;
         border: 1px solid rgba(22, 50, 79, 0.08);
         border-radius: 20px 20px 0 0;
         font: inherit;
@@ -804,7 +984,7 @@ function buildViewerHtml(viewerConfig) {
         justify-self: start;
         width: auto;
         min-height: 36px;
-        padding: 7px 12px 8px;
+        padding: 6px 12px 7px;
         border-radius: 999px;
         color: #506377;
         background: rgba(255, 255, 255, 0.94);
@@ -830,7 +1010,7 @@ function buildViewerHtml(viewerConfig) {
       .toolbar-section {
         display: grid;
         gap: 10px;
-        padding: 12px;
+        padding: 10px 12px;
         border: 1px solid rgba(22, 50, 79, 0.08);
         border-radius: 14px;
         background:
@@ -839,7 +1019,7 @@ function buildViewerHtml(viewerConfig) {
 
       .toolbar-section-header {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
         gap: 10px;
       }
@@ -857,7 +1037,7 @@ function buildViewerHtml(viewerConfig) {
         margin: 0;
         font-size: 12px;
         font-weight: 700;
-        color: #16324f;
+        color: #5d738b;
       }
 
       .button-row {
@@ -886,7 +1066,7 @@ function buildViewerHtml(viewerConfig) {
         justify-content: center;
         border: 0;
         border-radius: 999px;
-        padding: 9px 14px;
+        padding: 7px 14px;
         font: inherit;
         font-size: 14px;
         font-weight: 600;
@@ -922,6 +1102,14 @@ function buildViewerHtml(viewerConfig) {
 
       .range-field {
         display: grid;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .range-field-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
         gap: 8px;
         min-width: 0;
       }
@@ -1105,16 +1293,32 @@ function buildViewerHtml(viewerConfig) {
         <div class="toolbar-section">
           <div class="toolbar-section-header">
             <p class="toolbar-section-title">LOD</p>
-            <p id="geometric-error-value" class="toolbar-value">x1.00</p>
           </div>
           <label class="range-field">
-            <span>Geometric Error</span>
+            <div class="range-field-header">
+              <span>Geometric Error</span>
+              <p id="geometric-error-value" class="toolbar-value">x1.00</p>
+            </div>
             <input
               id="geometric-error-scale"
               type="range"
               min="-4"
               max="4"
               step="0.1"
+              value="0"
+            />
+          </label>
+          <label class="range-field">
+            <div class="range-field-header">
+              <span>Layer Multiplier</span>
+              <p id="geometric-error-layer-value" class="toolbar-value">x1.00</p>
+            </div>
+            <input
+              id="geometric-error-layer-scale"
+              type="range"
+              min="-0.5849625007211562"
+              max="0.5849625007211562"
+              step="any"
               value="0"
             />
           </label>

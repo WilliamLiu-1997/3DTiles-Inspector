@@ -100,12 +100,26 @@ const geometricErrorScaleInput = document.getElementById(
   'geometric-error-scale',
 );
 const geometricErrorValueEl = document.getElementById('geometric-error-value');
+const geometricErrorLayerScaleInput = document.getElementById(
+  'geometric-error-layer-scale',
+);
+const geometricErrorLayerValueEl = document.getElementById(
+  'geometric-error-layer-value',
+);
 const setPositionButton = document.getElementById('set-position');
 const resetButton = document.getElementById('reset');
 const saveButton = document.getElementById('save');
 const GEOMETRIC_ERROR_SCALE_MIN_EXPONENT = -4;
 const GEOMETRIC_ERROR_SCALE_MAX_EXPONENT = 4;
 const GEOMETRIC_ERROR_SCALE_STEP = 0.1;
+const GEOMETRIC_ERROR_LAYER_SCALE_MAX = 1.5;
+const GEOMETRIC_ERROR_LAYER_SCALE_MIN_EXPONENT = -Math.log2(
+  GEOMETRIC_ERROR_LAYER_SCALE_MAX,
+);
+const GEOMETRIC_ERROR_LAYER_SCALE_MAX_EXPONENT = Math.log2(
+  GEOMETRIC_ERROR_LAYER_SCALE_MAX,
+);
+const GEOMETRIC_ERROR_LAYER_SCALE_STEP = 'any';
 const DEFAULT_ERROR_TARGET = 16;
 const DEFAULT_TERRAIN_ERROR_TARGET = 16;
 const RUNTIME_STATS_UPDATE_INTERVAL_MS = 250;
@@ -470,12 +484,16 @@ const savedRootInverseMatrix = new Matrix4();
 const pointerCoords = new Vector2();
 const pickRaycaster = new Raycaster();
 const pickTargets = [];
+const originalTileGeometricErrors = new WeakMap();
 let tiles = null;
 let toolbarVisible = true;
 let activeTransformMode = null;
 let geometricErrorScaleExponent = 0;
 let geometricErrorScale = 1;
 let lastSavedGeometricErrorScale = 1;
+let geometricErrorLayerScaleExponent = 0;
+let geometricErrorLayerScale = 1;
+let lastSavedGeometricErrorLayerScale = 1;
 let lastSavedMatrix = new Matrix4();
 const savedRootMatrix = new Matrix4();
 let savedRootMatrixPromise = Promise.resolve();
@@ -505,9 +523,87 @@ function updateGeometricErrorScaleDisplay() {
   )}`;
 }
 
+function updateGeometricErrorLayerScaleDisplay() {
+  geometricErrorLayerValueEl.textContent = `x${formatGeometricErrorScale(
+    geometricErrorLayerScale,
+  )}`;
+}
+
 function getEffectiveGeometricErrorScale() {
   return lastSavedGeometricErrorScale * geometricErrorScale;
 }
+
+function getEffectiveGeometricErrorLayerScale() {
+  return lastSavedGeometricErrorLayerScale * geometricErrorLayerScale;
+}
+
+function getKnownTileLeafDistance(tile, visited = new Set()) {
+  if (!tile || typeof tile !== 'object' || visited.has(tile)) {
+    return 0;
+  }
+
+  visited.add(tile);
+  let maxDistance = 0;
+  const children = Array.isArray(tile.children) ? tile.children : [];
+  for (const child of children) {
+    maxDistance = Math.max(
+      maxDistance,
+      getKnownTileLeafDistance(child, visited) + 1,
+    );
+  }
+  visited.delete(tile);
+  return maxDistance;
+}
+
+function getOriginalTileGeometricError(tile) {
+  if (!tile || typeof tile !== 'object') {
+    return null;
+  }
+
+  if (!originalTileGeometricErrors.has(tile)) {
+    const number = Number(tile.geometricError);
+    if (!Number.isFinite(number)) {
+      return null;
+    }
+    originalTileGeometricErrors.set(tile, number);
+  }
+
+  return originalTileGeometricErrors.get(tile);
+}
+
+function applyGeometricErrorLayerScaleToTile(tile) {
+  const originalGeometricError = getOriginalTileGeometricError(tile);
+  if (originalGeometricError === null) {
+    return;
+  }
+
+  const leafDistance = getKnownTileLeafDistance(tile);
+  tile.geometricError =
+    originalGeometricError *
+    getEffectiveGeometricErrorLayerScale() ** leafDistance;
+}
+
+function applyGeometricErrorLayerScaleToTileset() {
+  if (!tiles) {
+    return;
+  }
+
+  tiles.traverse(
+    (tile) => {
+      applyGeometricErrorLayerScaleToTile(tile);
+      return false;
+    },
+    null,
+    false,
+  );
+}
+
+const geometricErrorLayerScalePlugin = {
+  name: 'GeometricErrorLayerScalePlugin',
+  preprocessNode(tile) {
+    applyGeometricErrorLayerScaleToTile(tile);
+  },
+};
 
 function getGaussianMeshSplatCount(mesh) {
   if (!mesh || typeof mesh !== 'object') {
@@ -603,6 +699,21 @@ function setGeometricErrorScaleExponent(exponent) {
   geometricErrorScaleInput.value = geometricErrorScaleExponent.toFixed(1);
   updateGeometricErrorScaleDisplay();
   updateTilesetErrorTarget();
+}
+
+function setGeometricErrorLayerScaleExponent(exponent) {
+  geometricErrorLayerScaleExponent = clamp(
+    Number(exponent),
+    GEOMETRIC_ERROR_LAYER_SCALE_MIN_EXPONENT,
+    GEOMETRIC_ERROR_LAYER_SCALE_MAX_EXPONENT,
+  );
+  geometricErrorLayerScale = exponentToGeometricErrorScale(
+    geometricErrorLayerScaleExponent,
+  );
+  geometricErrorLayerScaleInput.value =
+    geometricErrorLayerScaleExponent.toFixed(1);
+  updateGeometricErrorLayerScaleDisplay();
+  applyGeometricErrorLayerScaleToTileset();
 }
 
 function syncTerrainButton() {
@@ -702,7 +813,15 @@ function toggleTransformMode(mode) {
 geometricErrorScaleInput.min = String(GEOMETRIC_ERROR_SCALE_MIN_EXPONENT);
 geometricErrorScaleInput.max = String(GEOMETRIC_ERROR_SCALE_MAX_EXPONENT);
 geometricErrorScaleInput.step = String(GEOMETRIC_ERROR_SCALE_STEP);
+geometricErrorLayerScaleInput.min = String(
+  GEOMETRIC_ERROR_LAYER_SCALE_MIN_EXPONENT,
+);
+geometricErrorLayerScaleInput.max = String(
+  GEOMETRIC_ERROR_LAYER_SCALE_MAX_EXPONENT,
+);
+geometricErrorLayerScaleInput.step = String(GEOMETRIC_ERROR_LAYER_SCALE_STEP);
 setGeometricErrorScaleExponent(geometricErrorScaleExponent);
+setGeometricErrorLayerScaleExponent(geometricErrorLayerScaleExponent);
 setTerrainEnabled(terrainEnabled);
 setTransformMode(activeTransformMode);
 syncToolbarVisibility();
@@ -1324,7 +1443,9 @@ function loadTileset(url) {
 
   resetEditableGroup();
   lastSavedGeometricErrorScale = 1;
+  lastSavedGeometricErrorLayerScale = 1;
   setGeometricErrorScaleExponent(0);
+  setGeometricErrorLayerScaleExponent(0);
   savedRootMatrix.identity();
   savedRootMatrixLoadError = null;
   savedRootMatrixPromise = refreshSavedRootMatrix(url).then(
@@ -1348,7 +1469,16 @@ function loadTileset(url) {
   next.registerPlugin(new TileCompressionPlugin());
   next.registerPlugin(new UnloadTilesPlugin());
   next.registerPlugin(new ImplicitTilingPlugin());
-  next.registerPlugin(new GaussianSplatPlugin({ renderer, scene }));
+  next.registerPlugin(geometricErrorLayerScalePlugin);
+  next.registerPlugin(
+    new GaussianSplatPlugin({
+      renderer,
+      scene,
+      sparkRendererOptions: {
+        accumExtSplats: true,
+      },
+    }),
+  );
   debugTilesPlugin = new DebugTilesPlugin({
     displayBoxBounds: showBoundingVolume,
     displaySphereBounds: showBoundingVolume,
@@ -1399,6 +1529,7 @@ function loadTileset(url) {
     }
   };
 
+  next.addEventListener('load-tileset', applyGeometricErrorLayerScaleToTileset);
   next.addEventListener('load-tile-set', tryFrame);
   next.addEventListener('load-tileset', tryFrame);
 }
@@ -1414,6 +1545,8 @@ async function saveTransform() {
     .multiply(lastSavedMatrix.clone().invert());
   const incrementalGeometricErrorScale = geometricErrorScale;
   const savedGeometricErrorScale = getEffectiveGeometricErrorScale();
+  const incrementalGeometricErrorLayerScale = geometricErrorLayerScale;
+  const savedGeometricErrorLayerScale = getEffectiveGeometricErrorLayerScale();
 
   try {
     const response = await fetch(SAVE_URL, {
@@ -1422,6 +1555,7 @@ async function saveTransform() {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
+        geometricErrorLayerScale: incrementalGeometricErrorLayerScale,
         geometricErrorScale: incrementalGeometricErrorScale,
         transform: incrementalMatrix.toArray(),
       }),
@@ -1452,13 +1586,17 @@ async function saveTransform() {
       }
     }
     lastSavedGeometricErrorScale = savedGeometricErrorScale;
+    lastSavedGeometricErrorLayerScale = savedGeometricErrorLayerScale;
     lastSavedMatrix.copy(currentMatrix);
     setGeometricErrorScaleExponent(0);
+    setGeometricErrorLayerScaleExponent(0);
     syncTransformHandleFromTilesTransform();
     syncCoordinateInputsFromTilesTransform();
     setStatus(
-      `Saved transform and geometric-error scale x${formatGeometricErrorScale(
+      `Saved transform, geometric-error scale x${formatGeometricErrorScale(
         savedGeometricErrorScale,
+      )}, and layer multiplier x${formatGeometricErrorScale(
+        savedGeometricErrorLayerScale,
       )} to ${ROOT_TILESET_LABEL} and build_summary.json.`,
     );
   } catch (err) {
@@ -1503,6 +1641,16 @@ geometricErrorScaleInput.addEventListener('change', () => {
   setStatus(
     `Geometric-error scale set to x${formatGeometricErrorScale(
       geometricErrorScale,
+    )}.`,
+  );
+});
+geometricErrorLayerScaleInput.addEventListener('input', () => {
+  setGeometricErrorLayerScaleExponent(geometricErrorLayerScaleInput.value);
+});
+geometricErrorLayerScaleInput.addEventListener('change', () => {
+  setStatus(
+    `Geometric-error layer multiplier set to x${formatGeometricErrorScale(
+      geometricErrorLayerScale,
     )}.`,
   );
 });

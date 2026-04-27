@@ -6,6 +6,16 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-04-27
+
+### Added
+
+- Added an LOD `Layer Multiplier` slider to scale geometric errors progressively by distance from leaf tiles.
+
+### Changed
+
+- Tightened inspector toolbar spacing and LOD slider value labels.
+
 ## [0.1.4] - 2026-04-25
 
 ### Changed
