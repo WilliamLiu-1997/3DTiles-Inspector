@@ -6,6 +6,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-04-27
+
+### Changed
+
+- Changed `Layer Multiplier` to use the tileset-wide minimum leaf geometric error as the baseline, so non-minimum leaf tiles are scaled too.
+
 ## [0.1.6] - 2026-04-27
 
 ### Changed

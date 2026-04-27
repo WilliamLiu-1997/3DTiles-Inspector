@@ -344,9 +344,7 @@ function scaleTilesetGeometricErrors(
   tile,
   geometricErrorScale,
   geometricErrorLayerScale,
-  baseDir,
-  rootDir,
-  leafGeometricErrorCache,
+  leafGeometricError,
   pathLabel = 'tileset.root',
 ) {
   if (!tile || typeof tile !== 'object') {
@@ -358,13 +356,7 @@ function scaleTilesetGeometricErrors(
     'geometricError',
     geometricErrorScale,
     geometricErrorLayerScale,
-    getTileLeafGeometricError(
-      tile,
-      baseDir,
-      rootDir,
-      leafGeometricErrorCache,
-      new Set(),
-    ),
+    leafGeometricError,
     `${pathLabel}.geometricError`,
   );
 
@@ -377,9 +369,7 @@ function scaleTilesetGeometricErrors(
       child,
       geometricErrorScale,
       geometricErrorLayerScale,
-      baseDir,
-      rootDir,
-      leafGeometricErrorCache,
+      leafGeometricError,
       `${pathLabel}.children[${index}]`,
     );
   });
@@ -428,6 +418,7 @@ function updateTilesetJsonFile(
     rootDir,
     rootTransform = null,
     leafGeometricErrorCache = new Map(),
+    globalLeafGeometricError = null,
   },
   visited = new Set(),
 ) {
@@ -455,27 +446,30 @@ function updateTilesetJsonFile(
   }
 
   const tilesetDir = path.dirname(resolvedPath);
+  const effectiveLeafGeometricError =
+    globalLeafGeometricError == null
+      ? getTileLeafGeometricError(
+          tileset.root,
+          tilesetDir,
+          rootDir,
+          leafGeometricErrorCache,
+          new Set(),
+        )
+      : globalLeafGeometricError;
+
   scaleGeometricErrorValue(
     tileset,
     'geometricError',
     geometricErrorScale,
     geometricErrorLayerScale,
-    getTileLeafGeometricError(
-      tileset.root,
-      tilesetDir,
-      rootDir,
-      leafGeometricErrorCache,
-      new Set(),
-    ),
+    effectiveLeafGeometricError,
     `${resolvedPath}.geometricError`,
   );
   scaleTilesetGeometricErrors(
     tileset.root,
     geometricErrorScale,
     geometricErrorLayerScale,
-    tilesetDir,
-    rootDir,
-    leafGeometricErrorCache,
+    effectiveLeafGeometricError,
     `${resolvedPath}.root`,
   );
   writeJsonAtomic(resolvedPath, tileset);
@@ -489,6 +483,7 @@ function updateTilesetJsonFile(
         geometricErrorLayerScale,
         geometricErrorScale,
         leafGeometricErrorCache,
+        globalLeafGeometricError: effectiveLeafGeometricError,
         rootDir,
       },
       visited,

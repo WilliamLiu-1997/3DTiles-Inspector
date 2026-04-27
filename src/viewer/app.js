@@ -580,9 +580,28 @@ function getKnownTileLeafGeometricError(tile, visited = new Set()) {
     : leafGeometricError;
 }
 
-function applyGeometricErrorLayerScaleToTile(tile) {
+function getGlobalTileLeafGeometricError(tile) {
+  const rootLeafGeometricError = tiles?.root
+    ? getKnownTileLeafGeometricError(tiles.root)
+    : null;
+  const tileLeafGeometricError = getKnownTileLeafGeometricError(tile);
+
+  if (rootLeafGeometricError === null) {
+    return tileLeafGeometricError;
+  }
+
+  if (tileLeafGeometricError === null) {
+    return rootLeafGeometricError;
+  }
+
+  return Math.min(rootLeafGeometricError, tileLeafGeometricError);
+}
+
+function applyGeometricErrorLayerScaleToTile(
+  tile,
+  leafGeometricError = getGlobalTileLeafGeometricError(tile),
+) {
   const originalGeometricError = getOriginalTileGeometricError(tile);
-  const leafGeometricError = getKnownTileLeafGeometricError(tile);
   if (originalGeometricError === null || leafGeometricError === null) {
     return;
   }
@@ -598,9 +617,10 @@ function applyGeometricErrorLayerScaleToTileset() {
     return;
   }
 
+  const leafGeometricError = getGlobalTileLeafGeometricError(tiles.root);
   tiles.traverse(
     (tile) => {
-      applyGeometricErrorLayerScaleToTile(tile);
+      applyGeometricErrorLayerScaleToTile(tile, leafGeometricError);
       return false;
     },
     null,

@@ -124,10 +124,10 @@ async function main() {
     const tileset = JSON.parse(fs.readFileSync(tilesetPath, 'utf8'));
     assert.strictEqual(tileset.geometricError, 1460);
     assert.strictEqual(tileset.root.geometricError, 1460);
-    assert.strictEqual(tileset.root.children[0].geometricError, 450);
+    assert.strictEqual(tileset.root.children[0].geometricError, 660);
     assert.strictEqual(
       tileset.root.children[0].children[0].geometricError,
-      50,
+      260,
     );
     assert.strictEqual(tileset.root.children[1].geometricError, 500);
 
