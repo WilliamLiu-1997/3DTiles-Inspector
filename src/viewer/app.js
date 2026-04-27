@@ -112,14 +112,9 @@ const saveButton = document.getElementById('save');
 const GEOMETRIC_ERROR_SCALE_MIN_EXPONENT = -4;
 const GEOMETRIC_ERROR_SCALE_MAX_EXPONENT = 4;
 const GEOMETRIC_ERROR_SCALE_STEP = 0.1;
-const GEOMETRIC_ERROR_LAYER_SCALE_MAX = 1.5;
-const GEOMETRIC_ERROR_LAYER_SCALE_MIN_EXPONENT = -Math.log2(
-  GEOMETRIC_ERROR_LAYER_SCALE_MAX,
-);
-const GEOMETRIC_ERROR_LAYER_SCALE_MAX_EXPONENT = Math.log2(
-  GEOMETRIC_ERROR_LAYER_SCALE_MAX,
-);
-const GEOMETRIC_ERROR_LAYER_SCALE_STEP = 'any';
+const GEOMETRIC_ERROR_LAYER_SCALE_MIN_EXPONENT = -3;
+const GEOMETRIC_ERROR_LAYER_SCALE_MAX_EXPONENT = 3;
+const GEOMETRIC_ERROR_LAYER_SCALE_STEP = 0.1;
 const DEFAULT_ERROR_TARGET = 16;
 const DEFAULT_TERRAIN_ERROR_TARGET = 16;
 const RUNTIME_STATS_UPDATE_INTERVAL_MS = 250;
@@ -537,24 +532,6 @@ function getEffectiveGeometricErrorLayerScale() {
   return lastSavedGeometricErrorLayerScale * geometricErrorLayerScale;
 }
 
-function getKnownTileLeafDistance(tile, visited = new Set()) {
-  if (!tile || typeof tile !== 'object' || visited.has(tile)) {
-    return 0;
-  }
-
-  visited.add(tile);
-  let maxDistance = 0;
-  const children = Array.isArray(tile.children) ? tile.children : [];
-  for (const child of children) {
-    maxDistance = Math.max(
-      maxDistance,
-      getKnownTileLeafDistance(child, visited) + 1,
-    );
-  }
-  visited.delete(tile);
-  return maxDistance;
-}
-
 function getOriginalTileGeometricError(tile) {
   if (!tile || typeof tile !== 'object') {
     return null;
@@ -571,16 +548,49 @@ function getOriginalTileGeometricError(tile) {
   return originalTileGeometricErrors.get(tile);
 }
 
+function getKnownTileLeafGeometricError(tile, visited = new Set()) {
+  const originalGeometricError = getOriginalTileGeometricError(tile);
+  if (
+    originalGeometricError === null ||
+    !tile ||
+    typeof tile !== 'object' ||
+    visited.has(tile)
+  ) {
+    return originalGeometricError;
+  }
+
+  visited.add(tile);
+  let leafGeometricError = null;
+  const children = Array.isArray(tile.children) ? tile.children : [];
+  for (const child of children) {
+    const childLeafGeometricError = getKnownTileLeafGeometricError(
+      child,
+      visited,
+    );
+    if (childLeafGeometricError !== null) {
+      leafGeometricError =
+        leafGeometricError === null
+          ? childLeafGeometricError
+          : Math.min(leafGeometricError, childLeafGeometricError);
+    }
+  }
+  visited.delete(tile);
+  return leafGeometricError === null
+    ? originalGeometricError
+    : leafGeometricError;
+}
+
 function applyGeometricErrorLayerScaleToTile(tile) {
   const originalGeometricError = getOriginalTileGeometricError(tile);
-  if (originalGeometricError === null) {
+  const leafGeometricError = getKnownTileLeafGeometricError(tile);
+  if (originalGeometricError === null || leafGeometricError === null) {
     return;
   }
 
-  const leafDistance = getKnownTileLeafDistance(tile);
   tile.geometricError =
-    originalGeometricError *
-    getEffectiveGeometricErrorLayerScale() ** leafDistance;
+    leafGeometricError +
+    (originalGeometricError - leafGeometricError) *
+      getEffectiveGeometricErrorLayerScale();
 }
 
 function applyGeometricErrorLayerScaleToTileset() {

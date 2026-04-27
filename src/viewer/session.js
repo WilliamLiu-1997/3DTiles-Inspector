@@ -174,7 +174,14 @@ function normalizePositiveFinite(value, name) {
   return number;
 }
 
-function scaleGeometricErrorValue(target, key, scale, label) {
+function scaleGeometricErrorValue(
+  target,
+  key,
+  geometricErrorScale,
+  geometricErrorLayerScale,
+  leafGeometricError,
+  label,
+) {
   if (target[key] == null) {
     return;
   }
@@ -184,26 +191,19 @@ function scaleGeometricErrorValue(target, key, scale, label) {
     throw new InspectorError(`${label} must be a finite number.`);
   }
 
-  const next = number * scale;
+  if (!Number.isFinite(leafGeometricError)) {
+    throw new InspectorError(`${label} leaf geometricError must be finite.`);
+  }
+
+  const adjusted =
+    leafGeometricError +
+    (number - leafGeometricError) * geometricErrorLayerScale;
+  const next = adjusted * geometricErrorScale;
   if (!Number.isFinite(next)) {
     throw new InspectorError(`${label} scaled value must be finite.`);
   }
 
   target[key] = next;
-}
-
-function getGeometricErrorScaleForLeafDistance(
-  geometricErrorScale,
-  geometricErrorLayerScale,
-  leafDistance,
-  label,
-) {
-  const scale =
-    geometricErrorScale * geometricErrorLayerScale ** Math.max(0, leafDistance);
-  if (!Number.isFinite(scale)) {
-    throw new InspectorError(`${label} scale must be a finite number.`);
-  }
-  return scale;
 }
 
 function assertTilesetPathInsideRoot(resolvedPath, rootDir) {
@@ -250,15 +250,15 @@ function getLocalExternalTilesetPaths(tile, baseDir) {
   return paths;
 }
 
-function getTilesetRootLeafDistance(
+function getTilesetRootLeafGeometricError(
   tilesetPath,
   rootDir,
-  leafDistanceCache,
+  leafGeometricErrorCache,
   stack,
 ) {
   const resolvedPath = path.resolve(tilesetPath);
-  if (leafDistanceCache.has(resolvedPath)) {
-    return leafDistanceCache.get(resolvedPath);
+  if (leafGeometricErrorCache.has(resolvedPath)) {
+    return leafGeometricErrorCache.get(resolvedPath);
   }
 
   if (stack.has(resolvedPath)) {
@@ -279,47 +279,65 @@ function getTilesetRootLeafDistance(
   }
 
   stack.add(resolvedPath);
-  const leafDistance = getTileLeafDistance(
+  const leafGeometricError = getTileLeafGeometricError(
     tileset.root,
     path.dirname(resolvedPath),
     rootDir,
-    leafDistanceCache,
+    leafGeometricErrorCache,
     stack,
   );
   stack.delete(resolvedPath);
-  leafDistanceCache.set(resolvedPath, leafDistance);
-  return leafDistance;
+  leafGeometricErrorCache.set(resolvedPath, leafGeometricError);
+  return leafGeometricError;
 }
 
-function getTileLeafDistance(tile, baseDir, rootDir, leafDistanceCache, stack) {
+function getTileLeafGeometricError(
+  tile,
+  baseDir,
+  rootDir,
+  leafGeometricErrorCache,
+  stack,
+) {
   if (!tile || typeof tile !== 'object') {
     return 0;
   }
 
-  let maxDistance = 0;
+  const ownGeometricError = Number(tile.geometricError);
+  if (!Number.isFinite(ownGeometricError)) {
+    return 0;
+  }
+
+  let leafGeometricError = null;
   if (Array.isArray(tile.children)) {
     tile.children.forEach((child) => {
-      maxDistance = Math.max(
-        maxDistance,
-        getTileLeafDistance(child, baseDir, rootDir, leafDistanceCache, stack) +
-          1,
+      const childLeafGeometricError = getTileLeafGeometricError(
+        child,
+        baseDir,
+        rootDir,
+        leafGeometricErrorCache,
+        stack,
       );
+      leafGeometricError =
+        leafGeometricError === null
+          ? childLeafGeometricError
+          : Math.min(leafGeometricError, childLeafGeometricError);
     });
   }
 
   getLocalExternalTilesetPaths(tile, baseDir).forEach((childTilesetPath) => {
-    maxDistance = Math.max(
-      maxDistance,
-      getTilesetRootLeafDistance(
-        childTilesetPath,
-        rootDir,
-        leafDistanceCache,
-        stack,
-      ) + 1,
+    const childLeafGeometricError = getTilesetRootLeafGeometricError(
+      childTilesetPath,
+      rootDir,
+      leafGeometricErrorCache,
+      stack,
     );
+    leafGeometricError =
+      leafGeometricError === null
+        ? childLeafGeometricError
+        : Math.min(leafGeometricError, childLeafGeometricError);
   });
 
-  return maxDistance;
+  return leafGeometricError === null ? ownGeometricError : leafGeometricError;
 }
 
 function scaleTilesetGeometricErrors(
@@ -328,7 +346,7 @@ function scaleTilesetGeometricErrors(
   geometricErrorLayerScale,
   baseDir,
   rootDir,
-  leafDistanceCache,
+  leafGeometricErrorCache,
   pathLabel = 'tileset.root',
 ) {
   if (!tile || typeof tile !== 'object') {
@@ -338,11 +356,14 @@ function scaleTilesetGeometricErrors(
   scaleGeometricErrorValue(
     tile,
     'geometricError',
-    getGeometricErrorScaleForLeafDistance(
-      geometricErrorScale,
-      geometricErrorLayerScale,
-      getTileLeafDistance(tile, baseDir, rootDir, leafDistanceCache, new Set()),
-      pathLabel,
+    geometricErrorScale,
+    geometricErrorLayerScale,
+    getTileLeafGeometricError(
+      tile,
+      baseDir,
+      rootDir,
+      leafGeometricErrorCache,
+      new Set(),
     ),
     `${pathLabel}.geometricError`,
   );
@@ -358,7 +379,7 @@ function scaleTilesetGeometricErrors(
       geometricErrorLayerScale,
       baseDir,
       rootDir,
-      leafDistanceCache,
+      leafGeometricErrorCache,
       `${pathLabel}.children[${index}]`,
     );
   });
@@ -406,7 +427,7 @@ function updateTilesetJsonFile(
     geometricErrorScale,
     rootDir,
     rootTransform = null,
-    leafDistanceCache = new Map(),
+    leafGeometricErrorCache = new Map(),
   },
   visited = new Set(),
 ) {
@@ -437,17 +458,14 @@ function updateTilesetJsonFile(
   scaleGeometricErrorValue(
     tileset,
     'geometricError',
-    getGeometricErrorScaleForLeafDistance(
-      geometricErrorScale,
-      geometricErrorLayerScale,
-      getTileLeafDistance(
-        tileset.root,
-        tilesetDir,
-        rootDir,
-        leafDistanceCache,
-        new Set(),
-      ),
-      resolvedPath,
+    geometricErrorScale,
+    geometricErrorLayerScale,
+    getTileLeafGeometricError(
+      tileset.root,
+      tilesetDir,
+      rootDir,
+      leafGeometricErrorCache,
+      new Set(),
     ),
     `${resolvedPath}.geometricError`,
   );
@@ -457,7 +475,7 @@ function updateTilesetJsonFile(
     geometricErrorLayerScale,
     tilesetDir,
     rootDir,
-    leafDistanceCache,
+    leafGeometricErrorCache,
     `${resolvedPath}.root`,
   );
   writeJsonAtomic(resolvedPath, tileset);
@@ -470,7 +488,7 @@ function updateTilesetJsonFile(
       {
         geometricErrorLayerScale,
         geometricErrorScale,
-        leafDistanceCache,
+        leafGeometricErrorCache,
         rootDir,
       },
       visited,
@@ -936,8 +954,8 @@ function buildViewerHtml(viewerConfig) {
       .toolbar {
         display: grid;
         align-content: start;
-        gap: 10px;
-        padding: 14px;
+        gap: 8px;
+        padding: 10px 14px;
         border: 1px solid rgba(22, 50, 79, 0.12);
         border-top: 0;
         border-radius: 0 0 20px 20px;
@@ -1102,7 +1120,7 @@ function buildViewerHtml(viewerConfig) {
 
       .range-field {
         display: grid;
-        gap: 8px;
+        gap: 4px;
         min-width: 0;
       }
 
@@ -1316,9 +1334,9 @@ function buildViewerHtml(viewerConfig) {
             <input
               id="geometric-error-layer-scale"
               type="range"
-              min="-0.5849625007211562"
-              max="0.5849625007211562"
-              step="any"
+              min="-3"
+              max="3"
+              step="0.1"
               value="0"
             />
           </label>

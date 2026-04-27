@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-04-27
+
+### Changed
+
+- Changed `Layer Multiplier` to scale each tile's geometric-error difference from its leaf baseline instead of applying a depth-based multiplier.
+- Expanded the `Layer Multiplier` range to `1/8x` through `8x`.
+
 ## [0.1.5] - 2026-04-27
 
 ### Added

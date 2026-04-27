@@ -113,7 +113,7 @@ async function main() {
     });
     try {
       await postSave(session.url, {
-        geometricErrorLayerScale: 1.5,
+        geometricErrorLayerScale: 8,
         geometricErrorScale: 2,
         transform: IDENTITY_MATRIX4,
       });
@@ -122,25 +122,25 @@ async function main() {
     }
 
     const tileset = JSON.parse(fs.readFileSync(tilesetPath, 'utf8'));
-    assert.strictEqual(tileset.geometricError, 675);
-    assert.strictEqual(tileset.root.geometricError, 675);
-    assert.strictEqual(tileset.root.children[0].geometricError, 150);
+    assert.strictEqual(tileset.geometricError, 1460);
+    assert.strictEqual(tileset.root.geometricError, 1460);
+    assert.strictEqual(tileset.root.children[0].geometricError, 450);
     assert.strictEqual(
       tileset.root.children[0].children[0].geometricError,
       50,
     );
-    assert.strictEqual(tileset.root.children[1].geometricError, 180);
+    assert.strictEqual(tileset.root.children[1].geometricError, 500);
 
     const nestedTileset = JSON.parse(
       fs.readFileSync(nestedTilesetPath, 'utf8'),
     );
-    assert.strictEqual(nestedTileset.geometricError, 60);
-    assert.strictEqual(nestedTileset.root.geometricError, 60);
+    assert.strictEqual(nestedTileset.geometricError, 180);
+    assert.strictEqual(nestedTileset.root.geometricError, 180);
     assert.strictEqual(nestedTileset.root.children[0].geometricError, 20);
 
     const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
     assert.strictEqual(summary.viewer_geometric_error_scale, 4);
-    assert.strictEqual(summary.viewer_geometric_error_layer_scale, 1.5);
+    assert.strictEqual(summary.viewer_geometric_error_layer_scale, 8);
 
     console.log('ok');
   } finally {

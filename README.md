@@ -82,7 +82,7 @@ const {
 - `Set Position` to click the globe, terrain, or loaded tiles and place the tileset there
 - `Terrain` to toggle Cesium World Terrain while keeping satellite imagery
 - `Geometric Error` scaling from `1/16x` to `16x`
-- `Layer Multiplier` scaling from `1/1.5x` to `1.5x` for leaf-based geometric error changes between tile depths
+- `Layer Multiplier` scaling from `1/8x` to `8x` for each tile's geometric-error difference from its leaf baseline
 - `Save` to persist the updated root transform and geometric-error scale back to disk
 
 If `build_summary.json` exists next to the root tileset, `Save` also updates:
