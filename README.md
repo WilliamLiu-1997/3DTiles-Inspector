@@ -76,6 +76,8 @@ const {
 
 ## Inspector Features
 
+<img src="https://raw.githubusercontent.com/WilliamLiu-1997/3DTiles-Inspector/main/screenshot.png" alt="screenshot" width="960" />
+
 - `Translate`, `Rotate`, and `Reset` for root transform edits
 - `Move Camera` to a WGS84 latitude / longitude / height
 - `Move Tiles` to relocate the tileset root with an ENU-aligned transform
