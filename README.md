@@ -14,6 +14,13 @@
 
 Requires Node.js 18 or newer.
 
+## Built On
+
+This project is based on and integrates work from:
+
+- [WilliamLiu-1997/3D-Tiles-RendererJS-3DGS-Plugin](https://github.com/WilliamLiu-1997/3D-Tiles-RendererJS-3DGS-Plugin)
+- [NASA-AMMOS/3DTilesRendererJS](https://github.com/NASA-AMMOS/3DTilesRendererJS)
+
 ## Install
 
 ```bash
