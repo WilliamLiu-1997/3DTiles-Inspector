@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { Worker } = require('worker_threads');
 
 const { InspectorError } = require('../errors');
 
@@ -8,6 +9,8 @@ const GLB_VERSION = 2;
 const GLB_JSON_CHUNK_TYPE = 0x4e4f534a;
 const GLB_BIN_CHUNK_TYPE = 0x004e4942;
 const MAX_CROP_BOXES = 256;
+const SPLAT_CROP_WORKER_COUNT = 4;
+const SPLAT_CROP_WORKER_PATH = path.join(__dirname, 'splatCropWorker.js');
 const IDENTITY_MATRIX4 = Object.freeze([
   1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
   1.0,
@@ -17,13 +20,8 @@ let splatCropModulesPromise = null;
 
 function getSplatCropModules() {
   if (!splatCropModulesPromise) {
-    splatCropModulesPromise = Promise.all([
-      import('three'),
-      import('@sparkjsdev/spark'),
-    ]).then(([threeModule, sparkModule]) => ({
+    splatCropModulesPromise = import('three').then((threeModule) => ({
       THREE: threeModule,
-      SpzReader: sparkModule.SpzReader,
-      SpzWriter: sparkModule.SpzWriter,
     }));
   }
   return splatCropModulesPromise;
@@ -72,6 +70,175 @@ function normalizeSplatCropBoxes(value) {
   });
 }
 
+function deserializeWorkerError(error) {
+  const message =
+    error && typeof error.message === 'string'
+      ? error.message
+      : 'SPZ crop worker failed.';
+  const next =
+    error && error.name === 'InspectorError'
+      ? new InspectorError(message)
+      : new Error(message);
+  if (error && typeof error.stack === 'string') {
+    next.stack = error.stack;
+  }
+  return next;
+}
+
+class SplatCropWorkerPool {
+  constructor(size = SPLAT_CROP_WORKER_COUNT) {
+    this.callbacks = new Map();
+    this.closed = false;
+    this.idleWorkers = [];
+    this.nextJobId = 1;
+    this.queue = [];
+    this.workers = [];
+
+    const workerCount = Math.max(1, Math.floor(size));
+    for (let index = 0; index < workerCount; index++) {
+      const worker = this.createWorker();
+      this.workers.push(worker);
+      this.idleWorkers.push(worker);
+    }
+  }
+
+  createWorker() {
+    const worker = new Worker(SPLAT_CROP_WORKER_PATH);
+    worker.currentJobId = null;
+    worker.failed = false;
+    worker.on('message', (message) => {
+      this.handleMessage(worker, message);
+    });
+    worker.on('error', (err) => {
+      this.handleWorkerFailure(worker, err);
+    });
+    worker.on('exit', (code) => {
+      if (!this.closed && code !== 0) {
+        this.handleWorkerFailure(
+          worker,
+          new Error(`SPZ crop worker exited with code ${code}.`),
+        );
+      }
+    });
+    return worker;
+  }
+
+  handleMessage(worker, message) {
+    const job = this.callbacks.get(message?.id);
+    if (!job) {
+      return;
+    }
+
+    this.callbacks.delete(job.id);
+    worker.currentJobId = null;
+
+    if (message.error) {
+      job.reject(deserializeWorkerError(message.error));
+    } else {
+      const result = message.result || {};
+      job.resolve({
+        bytes: result.bytes ? Buffer.from(result.bytes) : null,
+        deleted: Number(result.deleted || 0),
+        empty: !!result.empty,
+      });
+    }
+
+    if (!this.closed && !worker.failed) {
+      this.idleWorkers.push(worker);
+      this.dispatch();
+    }
+  }
+
+  handleWorkerFailure(worker, err) {
+    if (worker.failed) {
+      return;
+    }
+    worker.failed = true;
+
+    this.workers = this.workers.filter((entry) => entry !== worker);
+    this.idleWorkers = this.idleWorkers.filter((entry) => entry !== worker);
+
+    if (worker.currentJobId !== null) {
+      const job = this.callbacks.get(worker.currentJobId);
+      if (job) {
+        this.callbacks.delete(job.id);
+        job.reject(err);
+      }
+      worker.currentJobId = null;
+    }
+
+    if (!this.closed) {
+      const replacement = this.createWorker();
+      this.workers.push(replacement);
+      this.idleWorkers.push(replacement);
+      this.dispatch();
+    }
+  }
+
+  dispatch() {
+    while (!this.closed && this.queue.length > 0 && this.idleWorkers.length > 0) {
+      const worker = this.idleWorkers.pop();
+      const job = this.queue.shift();
+      this.callbacks.set(job.id, job);
+      worker.currentJobId = job.id;
+      try {
+        worker.postMessage(
+          {
+            id: job.id,
+            payload: job.payload,
+            type: 'rewriteSpzBytes',
+          },
+          job.transferList,
+        );
+      } catch (err) {
+        this.callbacks.delete(job.id);
+        worker.currentJobId = null;
+        job.reject(err);
+        if (!worker.failed) {
+          this.idleWorkers.push(worker);
+        }
+      }
+    }
+  }
+
+  run(payload, transferList = []) {
+    if (this.closed) {
+      return Promise.reject(new Error('SPZ crop worker pool is closed.'));
+    }
+
+    return new Promise((resolve, reject) => {
+      this.queue.push({
+        id: this.nextJobId++,
+        payload,
+        reject,
+        resolve,
+        transferList,
+      });
+      this.dispatch();
+    });
+  }
+
+  async close() {
+    this.closed = true;
+    this.queue.forEach((job) => {
+      job.reject(new Error('SPZ crop worker pool was closed.'));
+    });
+    this.queue = [];
+    this.callbacks.forEach((job) => {
+      job.reject(new Error('SPZ crop worker pool was closed.'));
+    });
+    this.callbacks.clear();
+
+    await Promise.all(
+      this.workers.map((worker) =>
+        worker.terminate().catch(() => undefined),
+      ),
+    );
+    this.idleWorkers = [];
+    this.workers = [];
+  }
+}
+
 function assertPathInsideRoot(resolvedPath, rootDir, label) {
   const root = path.resolve(rootDir);
   const target = path.resolve(resolvedPath);
@@ -103,23 +270,62 @@ function resolveLocalUri(baseDir, rootDir, uri, label) {
   return assertPathInsideRoot(resolvedPath, rootDir, label);
 }
 
-function getContentEntries(tile) {
-  const entries = [];
+function getContentSlots(tile) {
+  const slots = [];
   if (tile && typeof tile.content === 'object' && tile.content) {
-    entries.push(tile.content);
+    slots.push({ content: tile.content, type: 'content' });
   }
   if (Array.isArray(tile?.contents)) {
     tile.contents.forEach((content) => {
       if (content && typeof content === 'object') {
-        entries.push(content);
+        slots.push({ content, type: 'contents' });
       }
     });
   }
-  return entries;
+  return slots;
 }
 
 function getContentUri(content) {
   return content.uri || content.url;
+}
+
+function removeContentSlot(tile, slot) {
+  if (slot.type === 'content') {
+    if (tile.content === slot.content) {
+      delete tile.content;
+      return true;
+    }
+    return false;
+  }
+
+  if (!Array.isArray(tile.contents)) {
+    return false;
+  }
+
+  const index = tile.contents.indexOf(slot.content);
+  if (index === -1) {
+    return false;
+  }
+
+  tile.contents.splice(index, 1);
+  if (tile.contents.length === 0) {
+    delete tile.contents;
+  }
+  return true;
+}
+
+function tileHasContent(tile) {
+  return (
+    !!(tile && typeof tile.content === 'object' && tile.content) ||
+    (Array.isArray(tile?.contents) && tile.contents.length > 0)
+  );
+}
+
+function tileIsEmpty(tile) {
+  return (
+    !tileHasContent(tile) &&
+    (!Array.isArray(tile?.children) || tile.children.length === 0)
+  );
 }
 
 function writeBytesAtomic(filePath, bytes) {
@@ -400,7 +606,7 @@ function collectGaussianPrimitiveDescriptors(THREE, json, tileSceneMatrix) {
     if (Number.isInteger(node.mesh)) {
       const mesh = meshes[node.mesh];
       if (mesh && Array.isArray(mesh.primitives)) {
-        mesh.primitives.forEach((primitive) => {
+        mesh.primitives.forEach((primitive, primitiveIndex) => {
           const gaussianExtension =
             primitive?.extensions?.KHR_gaussian_splatting?.extensions
               ?.KHR_gaussian_splatting_compression_spz_2;
@@ -418,6 +624,8 @@ function collectGaussianPrimitiveDescriptors(THREE, json, tileSceneMatrix) {
           }
           descriptors.push({
             bufferView,
+            meshIndex: node.mesh,
+            primitiveIndex,
             sourceToWorldMatrix: nodeWorldMatrix.clone(),
           });
         });
@@ -437,6 +645,79 @@ function collectGaussianPrimitiveDescriptors(THREE, json, tileSceneMatrix) {
   });
 
   return descriptors;
+}
+
+function hasScenePrimitives(json) {
+  const nodes = Array.isArray(json.nodes) ? json.nodes : [];
+  const meshes = Array.isArray(json.meshes) ? json.meshes : [];
+  const scenes = Array.isArray(json.scenes) ? json.scenes : [];
+  const sceneIndex = Number.isInteger(json.scene) ? json.scene : 0;
+  const rootNodeIndices = Array.isArray(scenes[sceneIndex]?.nodes)
+    ? scenes[sceneIndex].nodes
+    : nodes.map((_, index) => index);
+  const visited = new Set();
+
+  function visitNode(nodeIndex) {
+    if (!Number.isInteger(nodeIndex) || nodeIndex < 0 || nodeIndex >= nodes.length) {
+      return false;
+    }
+    if (visited.has(nodeIndex)) {
+      return false;
+    }
+
+    visited.add(nodeIndex);
+    const node = nodes[nodeIndex];
+    const mesh = Number.isInteger(node?.mesh) ? meshes[node.mesh] : null;
+    if (Array.isArray(mesh?.primitives) && mesh.primitives.length > 0) {
+      return true;
+    }
+
+    if (!Array.isArray(node?.children)) {
+      return false;
+    }
+
+    return node.children.some(visitNode);
+  }
+
+  return rootNodeIndices.some(visitNode);
+}
+
+function removeMeshPrimitives(resource, descriptors) {
+  const removals = new Map();
+  descriptors.forEach((descriptor) => {
+    if (
+      !Number.isInteger(descriptor.meshIndex) ||
+      !Number.isInteger(descriptor.primitiveIndex)
+    ) {
+      return;
+    }
+    removals.set(
+      `${descriptor.meshIndex}:${descriptor.primitiveIndex}`,
+      descriptor,
+    );
+  });
+
+  const ordered = Array.from(removals.values()).sort((left, right) => {
+    if (left.meshIndex !== right.meshIndex) {
+      return right.meshIndex - left.meshIndex;
+    }
+    return right.primitiveIndex - left.primitiveIndex;
+  });
+
+  let removed = 0;
+  ordered.forEach((descriptor) => {
+    const primitives = resource.json.meshes?.[descriptor.meshIndex]?.primitives;
+    if (
+      Array.isArray(primitives) &&
+      descriptor.primitiveIndex >= 0 &&
+      descriptor.primitiveIndex < primitives.length
+    ) {
+      primitives.splice(descriptor.primitiveIndex, 1);
+      removed += 1;
+    }
+  });
+
+  return removed;
 }
 
 function addReplacement(replacements, replacement) {
@@ -553,175 +834,47 @@ function getBufferViewSlice(resource, bufferViewIndex) {
   };
 }
 
-function copyShArray(source, width, index) {
-  if (!source) {
-    return undefined;
-  }
-  return source.subarray(index * width, index * width + width);
+function serializeCropBoxMatrices(cropBoxMatrices) {
+  return cropBoxMatrices.map((matrix) => matrix.toArray());
 }
 
-async function rewriteSpzBytes({
-  THREE,
-  SpzReader,
-  SpzWriter,
+function serializeRewriteDescriptors(descriptors) {
+  return descriptors.map((descriptor) => ({
+    sourceToWorldMatrix: descriptor.sourceToWorldMatrix.toArray(),
+  }));
+}
+
+function rewriteSpzBytesInWorker({
   bytes,
   cropBoxMatrices,
   descriptors,
+  workerPool,
 }) {
-  const spz = new SpzReader({ fileBytes: bytes });
-  await spz.parseHeader();
-  if (spz.flagLod) {
-    throw new InspectorError(
-      'SPZ files with built-in LOD flags are not supported for crop deletion yet.',
-    );
-  }
-
-  const centers = new Float64Array(spz.numSplats * 3);
-  const alphas = new Float64Array(spz.numSplats);
-  const rgbs = new Float64Array(spz.numSplats * 3);
-  const scales = new Float64Array(spz.numSplats * 3);
-  const quats = new Float64Array(spz.numSplats * 4);
-  const sh1Values = spz.shDegree >= 1 ? new Float32Array(spz.numSplats * 9) : null;
-  const sh2Values = spz.shDegree >= 2 ? new Float32Array(spz.numSplats * 15) : null;
-  const sh3Values = spz.shDegree >= 3 ? new Float32Array(spz.numSplats * 21) : null;
-
-  await spz.parseSplats(
-    (index, x, y, z) => {
-      centers[index * 3] = x;
-      centers[index * 3 + 1] = y;
-      centers[index * 3 + 2] = z;
+  const workerBytes = Uint8Array.from(bytes);
+  return workerPool.run(
+    {
+      bytes: workerBytes,
+      cropBoxMatrices,
+      descriptors: serializeRewriteDescriptors(descriptors),
     },
-    (index, alpha) => {
-      alphas[index] = alpha;
-    },
-    (index, r, g, b) => {
-      rgbs[index * 3] = r;
-      rgbs[index * 3 + 1] = g;
-      rgbs[index * 3 + 2] = b;
-    },
-    (index, scaleX, scaleY, scaleZ) => {
-      scales[index * 3] = scaleX;
-      scales[index * 3 + 1] = scaleY;
-      scales[index * 3 + 2] = scaleZ;
-    },
-    (index, quatX, quatY, quatZ, quatW) => {
-      quats[index * 4] = quatX;
-      quats[index * 4 + 1] = quatY;
-      quats[index * 4 + 2] = quatZ;
-      quats[index * 4 + 3] = quatW;
-    },
-    (index, sh1, sh2, sh3) => {
-      if (sh1Values && sh1) {
-        sh1Values.set(sh1, index * 9);
-      }
-      if (sh2Values && sh2) {
-        sh2Values.set(sh2, index * 15);
-      }
-      if (sh3Values && sh3) {
-        sh3Values.set(sh3, index * 21);
-      }
-    },
+    [workerBytes.buffer],
   );
+}
 
-  const sourceToBoxMatrices = [];
-  cropBoxMatrices.forEach((boxMatrix) => {
-    const boxInverse = boxMatrix.clone().invert();
-    descriptors.forEach((descriptor) => {
-      sourceToBoxMatrices.push(
-        boxInverse.clone().multiply(descriptor.sourceToWorldMatrix),
-      );
-    });
-  });
-
-  const center = new THREE.Vector3();
-  const local = new THREE.Vector3();
-  const survivors = [];
-  for (let index = 0; index < spz.numSplats; index++) {
-    center.set(
-      centers[index * 3],
-      centers[index * 3 + 1],
-      centers[index * 3 + 2],
-    );
-    let inside = false;
-    for (const matrix of sourceToBoxMatrices) {
-      local.copy(center).applyMatrix4(matrix);
-      if (
-        Math.abs(local.x) <= 1 &&
-        Math.abs(local.y) <= 1 &&
-        Math.abs(local.z) <= 1
-      ) {
-        inside = true;
-        break;
-      }
-    }
-    if (!inside) {
-      survivors.push(index);
-    }
-  }
-
-  const deleted = spz.numSplats - survivors.length;
-  if (deleted === 0) {
-    return { bytes: null, deleted: 0 };
-  }
-
-  const writer = new SpzWriter({
-    numSplats: survivors.length,
-    shDegree: spz.shDegree,
-    fractionalBits: spz.fractionalBits,
-    flagAntiAlias: spz.flagAntiAlias,
-  });
-
-  survivors.forEach((sourceIndex, targetIndex) => {
-    writer.setCenter(
-      targetIndex,
-      centers[sourceIndex * 3],
-      centers[sourceIndex * 3 + 1],
-      centers[sourceIndex * 3 + 2],
-    );
-    writer.setAlpha(targetIndex, alphas[sourceIndex]);
-    writer.setRgb(
-      targetIndex,
-      rgbs[sourceIndex * 3],
-      rgbs[sourceIndex * 3 + 1],
-      rgbs[sourceIndex * 3 + 2],
-    );
-    writer.setScale(
-      targetIndex,
-      scales[sourceIndex * 3],
-      scales[sourceIndex * 3 + 1],
-      scales[sourceIndex * 3 + 2],
-    );
-    writer.setQuat(
-      targetIndex,
-      quats[sourceIndex * 4],
-      quats[sourceIndex * 4 + 1],
-      quats[sourceIndex * 4 + 2],
-      quats[sourceIndex * 4 + 3],
-    );
-    if (spz.shDegree > 0) {
-      writer.setSh(
-        targetIndex,
-        copyShArray(sh1Values, 9, sourceIndex),
-        copyShArray(sh2Values, 15, sourceIndex),
-        copyShArray(sh3Values, 21, sourceIndex),
-      );
-    }
-  });
-
-  return {
-    bytes: await writer.finalize(),
-    deleted,
-  };
+function runWithResourceLock(resourceLocks, resourcePath, task) {
+  const previous = resourceLocks.get(resourcePath) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(task);
+  resourceLocks.set(resourcePath, next.catch(() => undefined));
+  return next;
 }
 
 async function processGltfResource({
   THREE,
-  SpzReader,
-  SpzWriter,
   filePath,
   rootDir,
   tileSceneMatrix,
   cropBoxMatrices,
+  workerPool,
 }) {
   const resource = loadGltfResource(filePath, rootDir);
   const descriptors = collectGaussianPrimitiveDescriptors(
@@ -730,7 +883,11 @@ async function processGltfResource({
     tileSceneMatrix,
   );
   if (descriptors.length === 0) {
-    return { deletedSplats: 0, processed: false };
+    return {
+      deletedSplats: 0,
+      empty: !hasScenePrimitives(resource.json),
+      processed: false,
+    };
   }
 
   const byBufferView = new Map();
@@ -742,22 +899,47 @@ async function processGltfResource({
   });
 
   const replacementsByBuffer = new Map();
+  const emptyDescriptors = [];
   let deletedSplats = 0;
+  const rewriteTasks = [];
+
   for (const [bufferViewIndex, viewDescriptors] of byBufferView) {
     const slice = getBufferViewSlice(resource, bufferViewIndex);
-    const rewrite = await rewriteSpzBytes({
-      THREE,
-      SpzReader,
-      SpzWriter,
-      bytes: slice.bytes,
-      cropBoxMatrices,
-      descriptors: viewDescriptors,
+    rewriteTasks.push({
+      bufferViewIndex,
+      slice,
+      viewDescriptors,
+      promise: rewriteSpzBytesInWorker({
+        bytes: slice.bytes,
+        cropBoxMatrices,
+        descriptors: viewDescriptors,
+        workerPool,
+      }),
     });
+  }
+
+  const rewriteResults = await Promise.all(
+    rewriteTasks.map(async (task) => ({
+      ...task,
+      rewrite: await task.promise,
+    })),
+  );
+
+  for (const {
+    bufferViewIndex,
+    rewrite,
+    slice,
+    viewDescriptors,
+  } of rewriteResults) {
+    deletedSplats += rewrite.deleted;
+    if (rewrite.empty) {
+      emptyDescriptors.push(...viewDescriptors);
+      continue;
+    }
     if (!rewrite.bytes) {
       continue;
     }
 
-    deletedSplats += rewrite.deleted;
     if (!replacementsByBuffer.has(slice.bufferIndex)) {
       replacementsByBuffer.set(slice.bufferIndex, []);
     }
@@ -770,24 +952,27 @@ async function processGltfResource({
   }
 
   let modified = false;
+  if (emptyDescriptors.length > 0) {
+    modified = removeMeshPrimitives(resource, emptyDescriptors) > 0 || modified;
+  }
   for (const [bufferIndex, replacements] of replacementsByBuffer) {
     modified = applyBufferReplacements(resource, bufferIndex, replacements) || modified;
   }
 
+  const empty = !hasScenePrimitives(resource.json);
   if (modified) {
     saveGltfResource(resource);
   }
 
   return {
     deletedSplats,
+    empty,
     processed: descriptors.length > 0,
   };
 }
 
 async function traverseTileset({
   THREE,
-  SpzReader,
-  SpzWriter,
   tilesetPath,
   rootDir,
   upRotationMatrix,
@@ -796,6 +981,9 @@ async function traverseTileset({
   parentTransform,
   visitedTilesets,
   processedResources,
+  emptySplatResources,
+  resourceLocks,
+  workerPool,
 }) {
   const resolvedTilesetPath = assertPathInsideRoot(
     tilesetPath,
@@ -803,7 +991,11 @@ async function traverseTileset({
     'Nested tileset path',
   );
   if (visitedTilesets.has(resolvedTilesetPath)) {
-    return { deletedSplats: 0, processedSplatResources: 0 };
+    return {
+      deletedSplats: 0,
+      processedSplatResources: 0,
+      rootEmpty: false,
+    };
   }
   visitedTilesets.add(resolvedTilesetPath);
 
@@ -815,16 +1007,23 @@ async function traverseTileset({
   const tilesetDir = path.dirname(resolvedTilesetPath);
   let deletedSplats = 0;
   let processedSplatResources = 0;
+  let tilesetModified = false;
 
   async function visitTile(tile, inheritedTransform, isRootTile) {
     const tileTransform = isRootTile && rootTransform
       ? new THREE.Matrix4().fromArray(rootTransform)
       : getTileWorldTransform(THREE, tile, inheritedTransform);
 
-    for (const content of getContentEntries(tile)) {
+    const contentResults = await Promise.all(getContentSlots(tile).map(async (slot) => {
+      const { content } = slot;
       const uri = getContentUri(content);
       if (typeof uri !== 'string' || uri.length === 0) {
-        continue;
+        return {
+          deletedSplats: 0,
+          processedSplatResources: 0,
+          removeSlot: false,
+          slot,
+        };
       }
 
       if (isRemoteOrProtocolUri(uri)) {
@@ -842,8 +1041,6 @@ async function traverseTileset({
         );
         const childResult = await traverseTileset({
           THREE,
-          SpzReader,
-          SpzWriter,
           tilesetPath: childTilesetPath,
           rootDir,
           upRotationMatrix,
@@ -852,9 +1049,16 @@ async function traverseTileset({
           parentTransform: tileTransform,
           visitedTilesets,
           processedResources,
+          emptySplatResources,
+          resourceLocks,
+          workerPool,
         });
-        deletedSplats += childResult.deletedSplats;
-        processedSplatResources += childResult.processedSplatResources;
+        return {
+          deletedSplats: childResult.deletedSplats,
+          processedSplatResources: childResult.processedSplatResources,
+          removeSlot: childResult.rootEmpty,
+          slot,
+        };
       } else if (extension === '.gltf' || extension === '.glb') {
         const resourcePath = resolveLocalUri(
           tilesetDir,
@@ -863,36 +1067,109 @@ async function traverseTileset({
           'Splat content URI',
         );
         const tileSceneMatrix = tileTransform.clone().multiply(upRotationMatrix);
-        const resourceResult = await processGltfResource({
-          THREE,
-          SpzReader,
-          SpzWriter,
-          filePath: resourcePath,
-          rootDir,
-          tileSceneMatrix,
-          cropBoxMatrices,
-        });
-        if (resourceResult.processed) {
-          if (!processedResources.has(resourcePath)) {
-            processedResources.add(resourcePath);
-            processedSplatResources += 1;
-          }
-          deletedSplats += resourceResult.deletedSplats;
-        }
+        const resourceResult = await runWithResourceLock(
+          resourceLocks,
+          resourcePath,
+          async () => {
+            const withProcessedResourceCount = (result) => {
+              const processedSplatResource =
+                result.processed && !processedResources.has(resourcePath)
+                  ? 1
+                  : 0;
+              if (processedSplatResource) {
+                processedResources.add(resourcePath);
+              }
+              return {
+                ...result,
+                processedSplatResource,
+              };
+            };
+            const cachedEmptyResource = emptySplatResources.get(resourcePath);
+            if (cachedEmptyResource) {
+              return withProcessedResourceCount({
+                deletedSplats: 0,
+                empty: true,
+                processed: cachedEmptyResource.processed,
+              });
+            }
+
+            const next = await processGltfResource({
+              THREE,
+              filePath: resourcePath,
+              rootDir,
+              tileSceneMatrix,
+              cropBoxMatrices,
+              workerPool,
+            });
+            if (next.empty) {
+              emptySplatResources.set(resourcePath, {
+                processed: next.processed,
+              });
+            }
+            return withProcessedResourceCount(next);
+          },
+        );
+        return {
+          deletedSplats: resourceResult.deletedSplats,
+          processedSplatResources: resourceResult.processedSplatResource,
+          removeSlot: resourceResult.empty,
+          slot,
+        };
       }
-    }
+
+      return {
+        deletedSplats: 0,
+        processedSplatResources: 0,
+        removeSlot: false,
+        slot,
+      };
+    }));
+
+    contentResults.forEach((result) => {
+      deletedSplats += result.deletedSplats;
+      processedSplatResources += result.processedSplatResources;
+      if (result.removeSlot && removeContentSlot(tile, result.slot)) {
+        tilesetModified = true;
+      }
+    });
 
     if (Array.isArray(tile.children)) {
-      for (const child of tile.children) {
-        await visitTile(child, tileTransform, false);
+      const children = tile.children.slice();
+      const childResults = await Promise.all(
+        children.map(async (child) => ({
+          child,
+          result: await visitTile(child, tileTransform, false),
+        })),
+      );
+      const keptChildren = [];
+      childResults.forEach(({ child, result: childResult }) => {
+        if (childResult.empty) {
+          tilesetModified = true;
+        } else {
+          keptChildren.push(child);
+        }
+      });
+      if (keptChildren.length === 0) {
+        if (tile.children.length > 0) {
+          tilesetModified = true;
+        }
+        delete tile.children;
+      } else if (keptChildren.length !== tile.children.length) {
+        tile.children = keptChildren;
       }
     }
+
+    return { empty: tileIsEmpty(tile) };
   }
 
-  await visitTile(tileset.root, parentTransform, true);
+  const rootResult = await visitTile(tileset.root, parentTransform, true);
+  if (tilesetModified) {
+    writeJsonAtomic(resolvedTilesetPath, tileset);
+  }
   return {
     deletedSplats,
     processedSplatResources,
+    rootEmpty: rootResult.empty,
   };
 }
 
@@ -909,7 +1186,7 @@ async function deleteSplatsInBoxes(rootTilesetPath, rootTransform, splatCropBoxe
   const rootDir = path.dirname(tilesetPath);
   assertPathInsideRoot(tilesetPath, rootDir, 'Root tileset path');
 
-  const { THREE, SpzReader, SpzWriter } = await getSplatCropModules();
+  const { THREE } = await getSplatCropModules();
   const rootTileset = JSON.parse(fs.readFileSync(tilesetPath, 'utf8'));
   if (!rootTileset || typeof rootTileset !== 'object' || !rootTileset.root) {
     throw new InspectorError(`${tilesetPath} must contain a root object.`);
@@ -925,23 +1202,30 @@ async function deleteSplatsInBoxes(rootTilesetPath, rootTransform, splatCropBoxe
     }
     return matrix;
   });
+  const cropBoxMatrixArrays = serializeCropBoxMatrices(cropBoxMatrices);
+  const workerPool = new SplatCropWorkerPool(SPLAT_CROP_WORKER_COUNT);
 
-  return traverseTileset({
-    THREE,
-    SpzReader,
-    SpzWriter,
-    tilesetPath,
-    rootDir,
-    upRotationMatrix,
-    rootTransform:
-      rootTransform == null
-        ? IDENTITY_MATRIX4
-        : normalizeMatrix4Array(rootTransform, 'rootTransform'),
-    cropBoxMatrices,
-    parentTransform: null,
-    visitedTilesets: new Set(),
-    processedResources: new Set(),
-  });
+  try {
+    return await traverseTileset({
+      THREE,
+      tilesetPath,
+      rootDir,
+      upRotationMatrix,
+      rootTransform:
+        rootTransform == null
+          ? IDENTITY_MATRIX4
+          : normalizeMatrix4Array(rootTransform, 'rootTransform'),
+      cropBoxMatrices: cropBoxMatrixArrays,
+      parentTransform: null,
+      visitedTilesets: new Set(),
+      processedResources: new Set(),
+      emptySplatResources: new Map(),
+      resourceLocks: new Map(),
+      workerPool,
+    });
+  } finally {
+    await workerPool.close();
+  }
 }
 
 module.exports = {

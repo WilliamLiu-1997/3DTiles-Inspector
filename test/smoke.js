@@ -195,6 +195,93 @@ async function assertCropSaveDeletesTwoSplats({ tilesetPath, readSpzBytes }) {
   assert.ok(Math.abs(centers[0].x - 3) < 0.01);
 }
 
+async function assertCropSavePrunesFullyDeletedSplatTile(baseDir) {
+  const pruneDir = path.join(baseDir, 'crop-prune');
+  fs.mkdirSync(pruneDir);
+
+  const removedSpzBytes = await createSpzBytes([
+    [0, 0, 0],
+    [0.5, 0, 0],
+  ]);
+  const keptSpzBytes = await createSpzBytes([[3, 0, 0]]);
+  const tilesetPath = path.join(pruneDir, 'tileset.json');
+  const removedGltfPath = path.join(pruneDir, 'removed.gltf');
+  const removedBinPath = path.join(pruneDir, 'removed.bin');
+  const keptGltfPath = path.join(pruneDir, 'kept.gltf');
+  const keptBinPath = path.join(pruneDir, 'kept.bin');
+
+  fs.writeFileSync(removedBinPath, removedSpzBytes);
+  fs.writeFileSync(keptBinPath, keptSpzBytes);
+  fs.writeFileSync(
+    removedGltfPath,
+    JSON.stringify(makeGaussianGltf('removed.bin', removedSpzBytes.length)),
+    'utf8',
+  );
+  fs.writeFileSync(
+    keptGltfPath,
+    JSON.stringify(makeGaussianGltf('kept.bin', keptSpzBytes.length)),
+    'utf8',
+  );
+  fs.writeFileSync(
+    tilesetPath,
+    JSON.stringify({
+      asset: { version: '1.1' },
+      geometricError: 10,
+      root: {
+        geometricError: 10,
+        children: [
+          {
+            content: { uri: 'removed.gltf' },
+            geometricError: 5,
+          },
+          {
+            content: { uri: 'kept.gltf' },
+            geometricError: 5,
+          },
+        ],
+      },
+    }),
+    'utf8',
+  );
+
+  const session = await api.startInspectorSession(tilesetPath, {
+    handleSignals: false,
+    openBrowser: false,
+  });
+  try {
+    const payload = await postSave(session.url, {
+      geometricErrorLayerScale: 1,
+      geometricErrorScale: 1,
+      splatCropBoxes: [{ matrix: IDENTITY_MATRIX4 }],
+      transform: IDENTITY_MATRIX4,
+    });
+    assert.strictEqual(payload.deletedSplats, 2);
+    assert.strictEqual(payload.processedSplatResources, 2);
+  } finally {
+    await session.close();
+  }
+
+  const rewrittenTileset = JSON.parse(fs.readFileSync(tilesetPath, 'utf8'));
+  assert.strictEqual(rewrittenTileset.root.children.length, 1);
+  assert.strictEqual(
+    rewrittenTileset.root.children[0].content.uri,
+    'kept.gltf',
+  );
+
+  const removedGltf = JSON.parse(fs.readFileSync(removedGltfPath, 'utf8'));
+  assert.strictEqual(removedGltf.meshes[0].primitives.length, 0);
+
+  const keptGltf = JSON.parse(fs.readFileSync(keptGltfPath, 'utf8'));
+  const keptView = keptGltf.bufferViews[0];
+  const keptBytes = fs.readFileSync(keptBinPath).subarray(
+    Number(keptView.byteOffset || 0),
+    Number(keptView.byteOffset || 0) + Number(keptView.byteLength),
+  );
+  const centers = await readSpzCenters(keptBytes);
+  assert.strictEqual(centers.length, 1);
+  assert.ok(Math.abs(centers[0].x - 3) < 0.01);
+}
+
 async function main() {
   assert.strictEqual(typeof api.InspectorError, 'function');
   assert.strictEqual(typeof api.startInspectorSession, 'function');
@@ -364,6 +451,8 @@ async function main() {
         );
       },
     });
+
+    await assertCropSavePrunesFullyDeletedSplatTile(tempDir);
 
     console.log('ok');
   } finally {

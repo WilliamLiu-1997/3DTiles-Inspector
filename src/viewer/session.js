@@ -906,6 +906,10 @@ function buildViewerHtml(viewerConfig) {
         box-sizing: border-box;
       }
 
+      [hidden] {
+        display: none !important;
+      }
+
       body {
         margin: 0;
         overflow: hidden;
@@ -1366,7 +1370,7 @@ function buildViewerHtml(viewerConfig) {
         <p class="runtime-stat-label">CacheBytes</p>
         <p id="cache-bytes-value" class="runtime-stat-value">0 B</p>
       </div>
-      <div class="runtime-stat">
+      <div id="splats-count-stat" class="runtime-stat" hidden>
         <p class="runtime-stat-label">splatsNumber</p>
         <p id="splats-count-value" class="runtime-stat-value">0</p>
       </div>
@@ -1421,7 +1425,7 @@ function buildViewerHtml(viewerConfig) {
             <button id="set-position" class="full-span" type="button">Set Position</button>
           </div>
         </div>
-        <div class="toolbar-section">
+        <div id="crop-section" class="toolbar-section" hidden>
           <div class="toolbar-section-header">
             <p class="toolbar-section-title">Crop Boxes</p>
             <p id="crop-count-value" class="toolbar-value">0</p>
@@ -1433,6 +1437,7 @@ function buildViewerHtml(viewerConfig) {
             <button id="crop-move" type="button">Move</button>
             <button id="crop-rotate" type="button">Rotate</button>
             <button id="crop-scale" type="button">Scale</button>
+            <button id="crop-set-position" type="button">Set Position</button>
           </div>
           <div id="crop-list" class="crop-list"></div>
           <div class="status-actions">

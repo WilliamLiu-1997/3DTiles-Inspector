@@ -5,11 +5,7 @@ import {
   EdgesGeometry,
   MathUtils,
   Group,
-  LineBasicMaterial,
-  LineSegments,
   Matrix4,
-  Mesh,
-  MeshBasicMaterial,
   PerspectiveCamera,
   Quaternion,
   Raycaster,
@@ -19,6 +15,9 @@ import {
   Vector3,
   WebGLRenderer,
 } from 'three';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import {
   SplatEdit,
   SplatEditRgbaBlendMode,
@@ -90,10 +89,19 @@ const MOVE_TO_COORDINATE_RADIUS = 10;
 const CROP_BOX_MIN_HALF_SIZE = 0.01;
 const CROP_BOX_DEFAULT_HALF_SIZE = 10;
 const CROP_BOX_SELECTED_COLOR = 0xffcf33;
-const CROP_BOX_DEFAULT_COLOR = 0x19a0b5;
+const CROP_BOX_DEFAULT_COLOR = 0x8f8f8f;
+const CROP_BOX_LINE_WIDTH = 1.5;
+const CROP_BOX_SELECTED_LINE_WIDTH = 2;
+const CROP_BOX_OVERLAY_OPACITY = 0.1;
+const CROP_BOX_SELECTED_OVERLAY_OPACITY = 0.2;
+const DEFAULT_CROP_TRANSFORM_MODE = 'scale';
+const SET_POSITION_CLICK_MAX_DISTANCE_PX = 2;
+const SET_POSITION_CLICK_MAX_DISTANCE_SQ =
+  SET_POSITION_CLICK_MAX_DISTANCE_PX ** 2;
 
 const statusEl = document.getElementById('status');
 const cacheBytesValueEl = document.getElementById('cache-bytes-value');
+const splatsCountStatEl = document.getElementById('splats-count-stat');
 const splatsCountValueEl = document.getElementById('splats-count-value');
 const tilesDownloadingValueEl = document.getElementById(
   'tiles-downloading-value',
@@ -110,8 +118,10 @@ const cropAddButton = document.getElementById('crop-add');
 const cropMoveButton = document.getElementById('crop-move');
 const cropRotateButton = document.getElementById('crop-rotate');
 const cropScaleButton = document.getElementById('crop-scale');
+const cropSetPositionButton = document.getElementById('crop-set-position');
 const cropDeleteButton = document.getElementById('crop-delete');
 const cropUndoButton = document.getElementById('crop-undo');
+const cropSectionEl = document.getElementById('crop-section');
 const cropCountValueEl = document.getElementById('crop-count-value');
 const cropListEl = document.getElementById('crop-list');
 const moveToTilesButton = document.getElementById('move-to-tiles');
@@ -275,7 +285,10 @@ function parseCoordinateInputs() {
 
 function updateModeButtons(mode) {
   const rootActive = activeTransformTarget === 'tiles';
-  translateButton.classList.toggle('active', rootActive && mode === 'translate');
+  translateButton.classList.toggle(
+    'active',
+    rootActive && mode === 'translate',
+  );
   rotateButton.classList.toggle('active', rootActive && mode === 'rotate');
 }
 
@@ -398,13 +411,12 @@ const cropSplatEdit = new SplatEdit({
   sdfSmooth: 0,
   softEdge: 0,
 });
-cropSplatEdit.opacity = 1;
-// The 3DGS plugin renders splats through a camera-relative Spark renderer.
-// Mark this edit root so the plugin rebases the crop SDFs into the same frame.
-cropSplatEdit.userData.gaussianSplat = true;
 scene.add(cropSplatEdit);
 const cropBoxGeometry = new BoxGeometry(2, 2, 2);
 const cropBoxEdgesGeometry = new EdgesGeometry(cropBoxGeometry);
+const cropBoxLineGeometry = new LineSegmentsGeometry().fromEdgesGeometry(
+  cropBoxEdgesGeometry,
+);
 
 const cameraController = new CameraController(renderer, contentGroup, camera);
 let globeTiles = null;
@@ -549,6 +561,8 @@ const coordinateTransformMatrix = new Matrix4();
 const coordinateEditMatrix = new Matrix4();
 const currentRootTransformMatrix = new Matrix4();
 const savedRootInverseMatrix = new Matrix4();
+const cropSetPositionWorldPosition = new Vector3();
+const cropSetPositionLocalPosition = new Vector3();
 const pointerCoords = new Vector2();
 const pickRaycaster = new Raycaster();
 const pickTargets = [];
@@ -567,11 +581,14 @@ const savedRootMatrix = new Matrix4();
 let savedRootMatrixPromise = Promise.resolve();
 let savedRootMatrixLoadError = null;
 let pendingSetPosition = false;
+let pendingCropSetPosition = false;
+let setPositionPointerStart = null;
 let syncingTransformHandle = false;
 let tilesTransformDirty = false;
 let lastRuntimeStatsUpdateTime = -Infinity;
 let showBoundingVolume = false;
 let debugTilesPlugin = null;
+let tilesetHasGaussianSplats = false;
 let activeTransformTarget = null;
 let activeCropTransformMode = null;
 let cropBoxes = [];
@@ -579,7 +596,6 @@ let selectedCropBoxId = null;
 let nextCropBoxId = 1;
 let cropUndoStack = [];
 let cropTransformSnapshot = null;
-let cropEditDirtyToggle = false;
 
 function getActiveEllipsoid() {
   return tiles?.ellipsoid || globeTiles?.ellipsoid || null;
@@ -802,11 +818,12 @@ function updateRuntimeStats(force = false) {
   const parsingTiles = tilesStats?.parsing ?? 0;
   const loadedTiles = tilesStats?.loaded ?? 0;
   const visibleTiles = tiles?.visibleTiles?.size ?? tilesStats?.visible ?? 0;
-  const activeSparkSplats = getActiveSparkSplatsCount();
-  const splatCount =
-    activeSparkSplats !== null
-      ? activeSparkSplats
-      : getLoadedGaussianSplatCount();
+  const activeSparkSplats = tilesetHasGaussianSplats
+    ? getActiveSparkSplatsCount()
+    : null;
+  const splatCount = tilesetHasGaussianSplats
+    ? (activeSparkSplats ?? getLoadedGaussianSplatCount())
+    : 0;
 
   cacheBytesValueEl.textContent = formatBytes(cacheBytes);
   splatsCountValueEl.textContent = formatInteger(splatCount);
@@ -814,6 +831,26 @@ function updateRuntimeStats(force = false) {
   tilesParsingValueEl.textContent = formatInteger(parsingTiles);
   tilesLoadedValueEl.textContent = formatInteger(loadedTiles);
   tilesVisibleValueEl.textContent = formatInteger(visibleTiles);
+}
+
+function setTilesetHasGaussianSplats(hasGaussianSplats) {
+  const nextValue = Boolean(hasGaussianSplats);
+  const changed = tilesetHasGaussianSplats !== nextValue;
+  tilesetHasGaussianSplats = nextValue;
+
+  if (splatsCountStatEl) {
+    splatsCountStatEl.hidden = !tilesetHasGaussianSplats;
+  }
+  if (cropSectionEl) {
+    cropSectionEl.hidden = !tilesetHasGaussianSplats;
+  }
+
+  if (!tilesetHasGaussianSplats && changed) {
+    clearCropBoxes();
+  }
+
+  updateCropButtons();
+  updateRuntimeStats(true);
 }
 
 function setGeometricErrorScaleExponent(exponent) {
@@ -912,15 +949,16 @@ function setTerrainEnabled(enabled) {
 
 function syncTransformControlsState() {
   const selectedBox = getSelectedCropBox();
+  const pendingPositionPick = pendingSetPosition || pendingCropSetPosition;
   const cropControlsVisible =
     activeTransformTarget === 'crop' &&
     activeCropTransformMode !== null &&
     selectedBox !== null &&
-    !pendingSetPosition;
+    !pendingPositionPick;
   const rootControlsVisible =
     activeTransformTarget === 'tiles' &&
     activeTransformMode !== null &&
-    !pendingSetPosition;
+    !pendingPositionPick;
 
   if (cropControlsVisible) {
     if (transformControls.object !== selectedBox.root) {
@@ -1231,18 +1269,12 @@ function getSelectedCropBox() {
   return cropBoxes.find((box) => box.id === selectedCropBoxId) || null;
 }
 
-function invalidateCropSplatEdit() {
-  cropEditDirtyToggle = !cropEditDirtyToggle;
-  cropSplatEdit.opacity = cropEditDirtyToggle ? 1 : 1 - 1e-12;
-}
-
 function syncCropEditSdfs() {
   cropSplatEdit.sdfs = null;
   cropSplatEdit.clear();
   cropBoxes.forEach((box) => {
     cropSplatEdit.add(box.sdf);
   });
-  invalidateCropSplatEdit();
 }
 
 function syncCropBoxSdf(box) {
@@ -1255,7 +1287,6 @@ function syncCropBoxSdf(box) {
   );
   box.sdf.updateMatrix();
   box.sdf.updateMatrixWorld(true);
-  invalidateCropSplatEdit();
 }
 
 function normalizeCropBoxTransform(box) {
@@ -1270,10 +1301,17 @@ function normalizeCropBoxTransform(box) {
 
 function setCropBoxSelectedStyle(box, selected) {
   const color = selected ? CROP_BOX_SELECTED_COLOR : CROP_BOX_DEFAULT_COLOR;
-  box.mesh.material.color.setHex(color);
-  box.mesh.material.opacity = selected ? 0.14 : 0.08;
+  const linewidth = selected
+    ? CROP_BOX_SELECTED_LINE_WIDTH
+    : CROP_BOX_LINE_WIDTH;
+
   box.edges.material.color.setHex(color);
-  box.edges.material.opacity = selected ? 1 : 0.72;
+  box.edges.material.linewidth = linewidth;
+  box.overlayEdges.material.color.setHex(color);
+  box.overlayEdges.material.opacity = selected
+    ? CROP_BOX_SELECTED_OVERLAY_OPACITY
+    : CROP_BOX_OVERLAY_OPACITY;
+  box.overlayEdges.material.linewidth = linewidth;
 }
 
 function updateCropBoxVisualState() {
@@ -1326,27 +1364,30 @@ function createCropBox({ id, matrix }) {
   root.name = `Crop Box ${id}`;
   root.userData.cropBoxId = id;
 
-  const mesh = new Mesh(
-    cropBoxGeometry,
-    new MeshBasicMaterial({
+  const edges = new LineSegments2(
+    cropBoxLineGeometry,
+    new LineMaterial({
       color: CROP_BOX_DEFAULT_COLOR,
-      depthWrite: false,
-      opacity: 0.08,
-      transparent: true,
-    }),
-  );
-  mesh.userData.cropBoxId = id;
-  const edges = new LineSegments(
-    cropBoxEdgesGeometry,
-    new LineBasicMaterial({
-      color: CROP_BOX_DEFAULT_COLOR,
-      opacity: 0.72,
-      transparent: true,
+      linewidth: CROP_BOX_LINE_WIDTH,
+      transparent: false,
     }),
   );
   edges.userData.cropBoxId = id;
-  root.add(mesh);
+  const overlayEdges = new LineSegments2(
+    cropBoxLineGeometry,
+    new LineMaterial({
+      color: CROP_BOX_DEFAULT_COLOR,
+      depthTest: false,
+      depthWrite: false,
+      linewidth: CROP_BOX_LINE_WIDTH,
+      opacity: CROP_BOX_OVERLAY_OPACITY,
+      transparent: true,
+    }),
+  );
+  overlayEdges.renderOrder = Infinity;
+  overlayEdges.userData.cropBoxId = id;
   root.add(edges);
+  root.add(overlayEdges);
 
   const sdf = new SplatEditSdf({
     type: SplatEditSdfType.BOX,
@@ -1358,7 +1399,7 @@ function createCropBox({ id, matrix }) {
   const box = {
     edges,
     id,
-    mesh,
+    overlayEdges,
     root,
     sdf,
   };
@@ -1375,8 +1416,8 @@ function createCropBox({ id, matrix }) {
 function disposeCropBox(box) {
   box.sdf.removeFromParent();
   cropGroup.remove(box.root);
-  box.mesh.material.dispose();
   box.edges.material.dispose();
+  box.overlayEdges.material.dispose();
 }
 
 function restoreCropSnapshot(snapshot) {
@@ -1411,6 +1452,7 @@ function restoreCropSnapshot(snapshot) {
 }
 
 function clearCropBoxes({ resetUndo = true } = {}) {
+  cancelCropSetPositionMode();
   cropBoxes.forEach(disposeCropBox);
   cropBoxes = [];
   selectedCropBoxId = null;
@@ -1437,7 +1479,7 @@ function updateCropList() {
     button.addEventListener('click', () => {
       selectCropBox(box.id);
       if (!activeCropTransformMode) {
-        setCropTransformMode('translate');
+        setCropTransformMode(DEFAULT_CROP_TRANSFORM_MODE);
       }
       setStatus(`Selected crop box ${index + 1}.`);
     });
@@ -1446,12 +1488,15 @@ function updateCropList() {
 }
 
 function updateCropButtons() {
-  const hasSelectedBox = getSelectedCropBox() !== null;
+  const hasSelectedBox =
+    tilesetHasGaussianSplats && getSelectedCropBox() !== null;
   const cropActive = activeTransformTarget === 'crop';
+  cropAddButton.disabled = !tilesetHasGaussianSplats;
   cropCountValueEl.textContent = String(cropBoxes.length);
   cropMoveButton.disabled = !hasSelectedBox;
   cropRotateButton.disabled = !hasSelectedBox;
   cropScaleButton.disabled = !hasSelectedBox;
+  cropSetPositionButton.disabled = !hasSelectedBox;
   cropDeleteButton.disabled = !hasSelectedBox;
   cropUndoButton.disabled = cropUndoStack.length === 0;
   cropMoveButton.classList.toggle(
@@ -1466,6 +1511,7 @@ function updateCropButtons() {
     'active',
     cropActive && activeCropTransformMode === 'scale',
   );
+  cropSetPositionButton.classList.toggle('active', pendingCropSetPosition);
   updateCropList();
 }
 
@@ -1503,8 +1549,22 @@ function selectCropBox(id) {
   syncTransformControlsState();
 }
 
+function getDefaultCropBoxQuaternion(position, target) {
+  if (
+    position.lengthSq() < CAMERA_CENTER_MODE_DISTANCE_SQ ||
+    !getActiveEllipsoid()
+  ) {
+    return target.identity();
+  }
+
+  getLocalFrame(position);
+  moveToTilesBasis.makeBasis(moveToTilesEast, moveToTilesNorth, moveToTilesUp);
+  return target.setFromRotationMatrix(moveToTilesBasis);
+}
+
 function createDefaultCropBoxMatrix(target) {
   const position = new Vector3();
+  const quaternion = new Quaternion();
   let halfSize = CROP_BOX_DEFAULT_HALF_SIZE;
 
   pointerCoords.set(0, 0);
@@ -1523,13 +1583,21 @@ function createDefaultCropBoxMatrix(target) {
 
   return target.compose(
     position,
-    new Quaternion(),
+    getDefaultCropBoxQuaternion(position, quaternion),
     new Vector3(halfSize, halfSize, halfSize),
   );
 }
 
 function addCropBox() {
-  cancelSetPositionMode();
+  if (!tilesetHasGaussianSplats) {
+    setStatus(
+      'Crop boxes are available for 3D Gaussian Splat tilesets only.',
+      true,
+    );
+    return;
+  }
+
+  cancelPositionPickModes();
   pushCropUndoSnapshot();
   const id = nextCropBoxId++;
   createCropBox({
@@ -1537,8 +1605,8 @@ function addCropBox() {
     matrix: createDefaultCropBoxMatrix(new Matrix4()).toArray(),
   });
   selectCropBox(id);
-  setCropTransformMode('translate');
-  setStatus('Added a crop box. Move, rotate, or scale it before saving.');
+  setCropTransformMode(DEFAULT_CROP_TRANSFORM_MODE);
+  setStatus('Added a crop box. Scale, move, or rotate it before saving.');
 }
 
 function deleteSelectedCropBox() {
@@ -1547,6 +1615,7 @@ function deleteSelectedCropBox() {
     return;
   }
 
+  cancelCropSetPositionMode();
   pushCropUndoSnapshot();
   cropBoxes = cropBoxes.filter((box) => box !== selectedBox);
   disposeCropBox(selectedBox);
@@ -1561,6 +1630,7 @@ function undoCropBoxEdit() {
   if (!snapshot) {
     return;
   }
+  cancelCropSetPositionMode();
   restoreCropSnapshot(snapshot);
   setStatus('Undid the latest crop-box edit.');
 }
@@ -1574,14 +1644,23 @@ function getSplatCropBoxesPayload() {
   });
 }
 
+function syncPositionPickModeState() {
+  setPositionButton.classList.toggle('active', pendingSetPosition);
+  cropSetPositionButton.classList.toggle('active', pendingCropSetPosition);
+  cameraController.enabled = !transformControls.dragging;
+  syncTransformControlsState();
+  updateCropButtons();
+}
+
 function setSetPositionMode(active) {
   pendingSetPosition = active;
-  setPositionButton.classList.toggle('active', active);
+  setPositionPointerStart = null;
   if (active) {
+    pendingCropSetPosition = false;
+    setTransformMode(null);
     setCropTransformMode(null);
   }
-  cameraController.enabled = !active;
-  syncTransformControlsState();
+  syncPositionPickModeState();
 }
 
 function cancelSetPositionMode() {
@@ -1590,6 +1669,31 @@ function cancelSetPositionMode() {
   }
 
   setSetPositionMode(false);
+}
+
+function setCropSetPositionMode(active) {
+  const hasSelectedBox = getSelectedCropBox() !== null;
+  pendingCropSetPosition = active && hasSelectedBox;
+  setPositionPointerStart = null;
+  if (pendingCropSetPosition) {
+    pendingSetPosition = false;
+    setTransformMode(null);
+    setCropTransformMode(null);
+  }
+  syncPositionPickModeState();
+}
+
+function cancelCropSetPositionMode() {
+  if (!pendingCropSetPosition) {
+    return;
+  }
+
+  setCropSetPositionMode(false);
+}
+
+function cancelPositionPickModes() {
+  cancelSetPositionMode();
+  cancelCropSetPositionMode();
 }
 
 async function applyTilesPlacementFromCoordinate(latitude, longitude, height) {
@@ -1614,12 +1718,7 @@ async function applyTilesPlacementFromCoordinate(latitude, longitude, height) {
   syncCoordinateInputsFromTilesTransform();
 }
 
-function pickCoordinateFromPointerEvent(event) {
-  const ellipsoid = getActiveEllipsoid();
-  if (!ellipsoid) {
-    return null;
-  }
-
+function pickWorldPositionFromPointerEvent(event, target) {
   mouseToCoords(
     event.clientX,
     event.clientY,
@@ -1628,10 +1727,21 @@ function pickCoordinateFromPointerEvent(event) {
   );
   setRaycasterFromCamera(pickRaycaster, pointerCoords, camera);
 
-  if (
-    !raycastPickWorldPosition(coordinateWorldPosition) &&
-    !ellipsoid.intersectRay(pickRaycaster.ray, coordinateWorldPosition)
-  ) {
+  if (raycastPickWorldPosition(target)) {
+    return true;
+  }
+
+  const ellipsoid = getActiveEllipsoid();
+  return !!ellipsoid && ellipsoid.intersectRay(pickRaycaster.ray, target);
+}
+
+function pickCoordinateFromPointerEvent(event) {
+  const ellipsoid = getActiveEllipsoid();
+  if (!ellipsoid) {
+    return null;
+  }
+
+  if (!pickWorldPositionFromPointerEvent(event, coordinateWorldPosition)) {
     return null;
   }
 
@@ -1646,18 +1756,44 @@ function pickCoordinateFromPointerEvent(event) {
   };
 }
 
-async function handleSetPositionPointerDown(event) {
-  if (!pendingSetPosition) {
-    return;
+function setSelectedCropBoxPositionFromPointerEvent(event) {
+  const selectedBox = getSelectedCropBox();
+  if (!selectedBox) {
+    return false;
   }
 
-  if (event.pointerType === 'mouse' && event.button !== 0) {
-    return;
+  if (
+    !pickWorldPositionFromPointerEvent(event, cropSetPositionWorldPosition)
+  ) {
+    setStatus(
+      'No globe, terrain, or tiles hit under cursor. Click the globe, terrain, or tiles to place the crop box.',
+      true,
+    );
+    return false;
   }
 
-  event.preventDefault();
-  event.stopPropagation();
+  const snapshot = createCropSnapshot();
+  cropSetPositionLocalPosition.copy(cropSetPositionWorldPosition);
+  if (selectedBox.root.parent) {
+    selectedBox.root.parent.updateMatrixWorld(true);
+    selectedBox.root.parent.worldToLocal(cropSetPositionLocalPosition);
+  }
+  selectedBox.root.position.copy(cropSetPositionLocalPosition);
+  selectedBox.root.updateMatrix();
+  selectedBox.root.updateMatrixWorld(true);
+  normalizeCropBoxTransform(selectedBox);
+  syncCropBoxSdf(selectedBox);
+  updateCropBoxVisualState();
+  syncTransformControlsState();
 
+  if (!snapshotsEqual(snapshot, createCropSnapshot())) {
+    pushCropUndoSnapshot(snapshot);
+  }
+
+  return true;
+}
+
+async function applyTilesSetPositionFromPointerEvent(event) {
   const coordinate = pickCoordinateFromPointerEvent(event);
   if (!coordinate) {
     setStatus(
@@ -1685,6 +1821,124 @@ async function handleSetPositionPointerDown(event) {
     setSetPositionMode(false);
   } catch (err) {
     setStatus(err && err.message ? err.message : String(err), true);
+  }
+}
+
+function applyCropSetPositionFromPointerEvent(event) {
+  if (!setSelectedCropBoxPositionFromPointerEvent(event)) {
+    return;
+  }
+
+  setCropSetPositionMode(false);
+  setCropTransformMode(DEFAULT_CROP_TRANSFORM_MODE);
+  setStatus('Moved selected crop box to the clicked position.');
+}
+
+function getActiveSetPositionTarget() {
+  if (pendingSetPosition) {
+    return 'tiles';
+  }
+  if (pendingCropSetPosition) {
+    return 'crop';
+  }
+  return null;
+}
+
+function shouldTrackSetPositionPointer(event) {
+  if (event.pointerType === 'mouse' && event.button !== 0) {
+    return false;
+  }
+  return event.isPrimary !== false;
+}
+
+function handleSetPositionPointerDown(event) {
+  const target = getActiveSetPositionTarget();
+  if (!target || !shouldTrackSetPositionPointer(event)) {
+    if (setPositionPointerStart && event.isPrimary === false) {
+      setPositionPointerStart.moved = true;
+    }
+    return;
+  }
+
+  setPositionPointerStart = {
+    clientX: event.clientX,
+    clientY: event.clientY,
+    moved: false,
+    pointerId: event.pointerId,
+    target,
+  };
+}
+
+function updateSetPositionPointerMovement(event) {
+  if (
+    !setPositionPointerStart ||
+    event.pointerId !== setPositionPointerStart.pointerId
+  ) {
+    return;
+  }
+
+  const deltaX = event.clientX - setPositionPointerStart.clientX;
+  const deltaY = event.clientY - setPositionPointerStart.clientY;
+  if (
+    deltaX * deltaX + deltaY * deltaY >
+    SET_POSITION_CLICK_MAX_DISTANCE_SQ
+  ) {
+    setPositionPointerStart.moved = true;
+  }
+}
+
+function handleSetPositionPointerMove(event) {
+  updateSetPositionPointerMovement(event);
+}
+
+function pointerMatchesSetPositionStart(event) {
+  if (!setPositionPointerStart) {
+    return false;
+  }
+  updateSetPositionPointerMovement(event);
+  if (event.pointerId !== setPositionPointerStart.pointerId) {
+    return false;
+  }
+  if (setPositionPointerStart.moved) {
+    return false;
+  }
+  if (getActiveSetPositionTarget() !== setPositionPointerStart.target) {
+    return false;
+  }
+
+  const deltaX = event.clientX - setPositionPointerStart.clientX;
+  const deltaY = event.clientY - setPositionPointerStart.clientY;
+  return (
+    deltaX * deltaX + deltaY * deltaY <= SET_POSITION_CLICK_MAX_DISTANCE_SQ
+  );
+}
+
+async function handleSetPositionPointerUp(event) {
+  if (!setPositionPointerStart) {
+    return;
+  }
+
+  const target = setPositionPointerStart.target;
+  const shouldApply = pointerMatchesSetPositionStart(event);
+  setPositionPointerStart = null;
+
+  if (!shouldApply) {
+    return;
+  }
+
+  if (target === 'tiles') {
+    await applyTilesSetPositionFromPointerEvent(event);
+  } else if (target === 'crop') {
+    applyCropSetPositionFromPointerEvent(event);
+  }
+}
+
+function handleSetPositionPointerCancel(event) {
+  if (
+    setPositionPointerStart &&
+    event.pointerId === setPositionPointerStart.pointerId
+  ) {
+    setPositionPointerStart = null;
   }
 }
 
@@ -1863,7 +2117,7 @@ function frameTileset() {
 }
 
 function moveCameraToTiles() {
-  cancelSetPositionMode();
+  cancelPositionPickModes();
   if (frameTileset()) {
     setStatus('Moved camera to the tileset.');
   } else {
@@ -1879,11 +2133,39 @@ function toggleSetPositionMode() {
   }
 
   setSetPositionMode(true);
-  setStatus('Click the globe, terrain, or tiles to place the tileset root.');
+  setStatus(
+    'Click the globe, terrain, or tiles without dragging to place the tileset root.',
+  );
+}
+
+function toggleCropSetPositionMode() {
+  if (!tilesetHasGaussianSplats) {
+    setStatus(
+      'Crop box Set Position is available for 3D Gaussian Splat tilesets only.',
+      true,
+    );
+    return;
+  }
+
+  if (pendingCropSetPosition) {
+    setCropSetPositionMode(false);
+    setStatus('Crop box Set Position cancelled.');
+    return;
+  }
+
+  if (!getSelectedCropBox()) {
+    setStatus('Select a crop box before setting its position.', true);
+    return;
+  }
+
+  setCropSetPositionMode(true);
+  setStatus(
+    'Click the globe, terrain, or tiles without dragging to place the selected crop box.',
+  );
 }
 
 function moveCameraToCoordinate() {
-  cancelSetPositionMode();
+  cancelPositionPickModes();
   const coordinate = parseCoordinateInputs();
   if (!coordinate) {
     return;
@@ -1912,7 +2194,7 @@ function moveCameraToCoordinate() {
 }
 
 async function moveTilesToCoordinate() {
-  cancelSetPositionMode();
+  cancelPositionPickModes();
   const coordinate = parseCoordinateInputs();
   if (!coordinate) {
     return;
@@ -1933,7 +2215,7 @@ async function moveTilesToCoordinate() {
 }
 
 function resetToSaved() {
-  cancelSetPositionMode();
+  cancelPositionPickModes();
   applySavedMatrix(lastSavedMatrix);
   setStatus('Reset to the last saved transform.');
 }
@@ -1946,6 +2228,7 @@ function loadTileset(url) {
     debugTilesPlugin = null;
   }
   clearCropBoxes();
+  setTilesetHasGaussianSplats(false);
 
   updateRuntimeStats(true);
 
@@ -2011,6 +2294,9 @@ function loadTileset(url) {
   applyBoundingVolumeVisibility();
   next.addEventListener('load-model', ({ scene: modelScene }) => {
     forceOpaqueScene(modelScene);
+    if (isGaussianSplatScene(modelScene)) {
+      setTilesetHasGaussianSplats(true);
+    }
     tilesTransformDirty = true;
   });
   next.addEventListener('tile-visibility-change', () => {
@@ -2043,7 +2329,7 @@ function loadTileset(url) {
 }
 
 async function saveTransform() {
-  cancelSetPositionMode();
+  cancelPositionPickModes();
   saveButton.disabled = true;
   const splatCropBoxes = getSplatCropBoxesPayload();
   setStatus(
@@ -2108,7 +2394,9 @@ async function saveTransform() {
     syncCoordinateInputsFromTilesTransform();
     if (splatCropBoxes.length > 0) {
       const deletedSplats = Number(payload.deletedSplats || 0);
-      const processedSplatResources = Number(payload.processedSplatResources || 0);
+      const processedSplatResources = Number(
+        payload.processedSplatResources || 0,
+      );
       clearCropBoxes();
       loadTileset(TILESET_URL);
       setStatus(
@@ -2131,7 +2419,7 @@ async function saveTransform() {
 }
 
 translateButton.addEventListener('click', () => {
-  cancelSetPositionMode();
+  cancelPositionPickModes();
   toggleTransformMode('translate');
   setStatus(
     activeTransformMode === 'translate'
@@ -2140,7 +2428,7 @@ translateButton.addEventListener('click', () => {
   );
 });
 rotateButton.addEventListener('click', () => {
-  cancelSetPositionMode();
+  cancelPositionPickModes();
   toggleTransformMode('rotate');
   setStatus(
     activeTransformMode === 'rotate'
@@ -2150,7 +2438,7 @@ rotateButton.addEventListener('click', () => {
 });
 cropAddButton.addEventListener('click', addCropBox);
 cropMoveButton.addEventListener('click', () => {
-  cancelSetPositionMode();
+  cancelPositionPickModes();
   toggleCropTransformMode('translate');
   setStatus(
     activeTransformTarget === 'crop' && activeCropTransformMode === 'translate'
@@ -2159,7 +2447,7 @@ cropMoveButton.addEventListener('click', () => {
   );
 });
 cropRotateButton.addEventListener('click', () => {
-  cancelSetPositionMode();
+  cancelPositionPickModes();
   toggleCropTransformMode('rotate');
   setStatus(
     activeTransformTarget === 'crop' && activeCropTransformMode === 'rotate'
@@ -2168,7 +2456,7 @@ cropRotateButton.addEventListener('click', () => {
   );
 });
 cropScaleButton.addEventListener('click', () => {
-  cancelSetPositionMode();
+  cancelPositionPickModes();
   toggleCropTransformMode('scale');
   setStatus(
     activeTransformTarget === 'crop' && activeCropTransformMode === 'scale'
@@ -2176,6 +2464,7 @@ cropScaleButton.addEventListener('click', () => {
       : 'Crop box scale mode disabled.',
   );
 });
+cropSetPositionButton.addEventListener('click', toggleCropSetPositionMode);
 cropDeleteButton.addEventListener('click', deleteSelectedCropBox);
 cropUndoButton.addEventListener('click', undoCropBoxEdit);
 toolbarToggleButton.addEventListener('click', toggleToolbarVisibility);
@@ -2217,6 +2506,18 @@ saveButton.addEventListener('click', saveTransform);
 renderer.domElement.addEventListener(
   'pointerdown',
   handleSetPositionPointerDown,
+);
+renderer.domElement.addEventListener(
+  'pointermove',
+  handleSetPositionPointerMove,
+);
+renderer.domElement.addEventListener(
+  'pointerup',
+  handleSetPositionPointerUp,
+);
+renderer.domElement.addEventListener(
+  'pointercancel',
+  handleSetPositionPointerCancel,
 );
 
 window.addEventListener('resize', () => {
