@@ -23,18 +23,7 @@ function copyShArray(source, width, index) {
   return source.subarray(index * width, index * width + width);
 }
 
-async function rewriteSpzBytes({ bytes, cropBoxMatrices, descriptors }) {
-  const { THREE, SpzReader, SpzWriter } = await getModules();
-  const spz = new SpzReader({ fileBytes: Buffer.from(bytes) });
-  await spz.parseHeader();
-  if (spz.flagLod) {
-    const err = new Error(
-      'SPZ files with built-in LOD flags are not supported for crop deletion yet.',
-    );
-    err.name = 'InspectorError';
-    throw err;
-  }
-
+function createSplatArrays(spz) {
   const centers = new Float64Array(spz.numSplats * 3);
   const alphas = new Float64Array(spz.numSplats);
   const rgbs = new Float64Array(spz.numSplats * 3);
@@ -47,44 +36,61 @@ async function rewriteSpzBytes({ bytes, cropBoxMatrices, descriptors }) {
   const sh3Values =
     spz.shDegree >= 3 ? new Float32Array(spz.numSplats * 21) : null;
 
+  return {
+    alphas,
+    centers,
+    quats,
+    rgbs,
+    scales,
+    sh1Values,
+    sh2Values,
+    sh3Values,
+  };
+}
+
+async function readSpzData(spz) {
+  const data = createSplatArrays(spz);
   await spz.parseSplats(
     (index, x, y, z) => {
-      centers[index * 3] = x;
-      centers[index * 3 + 1] = y;
-      centers[index * 3 + 2] = z;
+      data.centers[index * 3] = x;
+      data.centers[index * 3 + 1] = y;
+      data.centers[index * 3 + 2] = z;
     },
     (index, alpha) => {
-      alphas[index] = alpha;
+      data.alphas[index] = alpha;
     },
     (index, r, g, b) => {
-      rgbs[index * 3] = r;
-      rgbs[index * 3 + 1] = g;
-      rgbs[index * 3 + 2] = b;
+      data.rgbs[index * 3] = r;
+      data.rgbs[index * 3 + 1] = g;
+      data.rgbs[index * 3 + 2] = b;
     },
     (index, scaleX, scaleY, scaleZ) => {
-      scales[index * 3] = scaleX;
-      scales[index * 3 + 1] = scaleY;
-      scales[index * 3 + 2] = scaleZ;
+      data.scales[index * 3] = scaleX;
+      data.scales[index * 3 + 1] = scaleY;
+      data.scales[index * 3 + 2] = scaleZ;
     },
     (index, quatX, quatY, quatZ, quatW) => {
-      quats[index * 4] = quatX;
-      quats[index * 4 + 1] = quatY;
-      quats[index * 4 + 2] = quatZ;
-      quats[index * 4 + 3] = quatW;
+      data.quats[index * 4] = quatX;
+      data.quats[index * 4 + 1] = quatY;
+      data.quats[index * 4 + 2] = quatZ;
+      data.quats[index * 4 + 3] = quatW;
     },
     (index, sh1, sh2, sh3) => {
-      if (sh1Values && sh1) {
-        sh1Values.set(sh1, index * 9);
+      if (data.sh1Values && sh1) {
+        data.sh1Values.set(sh1, index * 9);
       }
-      if (sh2Values && sh2) {
-        sh2Values.set(sh2, index * 15);
+      if (data.sh2Values && sh2) {
+        data.sh2Values.set(sh2, index * 15);
       }
-      if (sh3Values && sh3) {
-        sh3Values.set(sh3, index * 21);
+      if (data.sh3Values && sh3) {
+        data.sh3Values.set(sh3, index * 21);
       }
     },
   );
+  return data;
+}
 
+function buildSourceToBoxMatrices(THREE, cropBoxMatrices, descriptors) {
   const sourceToBoxMatrices = [];
   cropBoxMatrices.forEach((boxMatrixArray) => {
     const boxInverse = new THREE.Matrix4().fromArray(boxMatrixArray).invert();
@@ -98,15 +104,18 @@ async function rewriteSpzBytes({ bytes, cropBoxMatrices, descriptors }) {
       );
     });
   });
+  return sourceToBoxMatrices;
+}
 
+function collectSurvivorIndices(THREE, splatData, splatCount, sourceToBoxMatrices) {
   const center = new THREE.Vector3();
   const local = new THREE.Vector3();
   const survivors = [];
-  for (let index = 0; index < spz.numSplats; index++) {
+  for (let index = 0; index < splatCount; index++) {
     center.set(
-      centers[index * 3],
-      centers[index * 3 + 1],
-      centers[index * 3 + 2],
+      splatData.centers[index * 3],
+      splatData.centers[index * 3 + 1],
+      splatData.centers[index * 3 + 2],
     );
     let inside = false;
     for (const matrix of sourceToBoxMatrices) {
@@ -124,16 +133,10 @@ async function rewriteSpzBytes({ bytes, cropBoxMatrices, descriptors }) {
       survivors.push(index);
     }
   }
+  return survivors;
+}
 
-  const deleted = spz.numSplats - survivors.length;
-  if (survivors.length === 0) {
-    return { bytes: null, deleted, empty: true };
-  }
-
-  if (deleted === 0) {
-    return { bytes: null, deleted: 0, empty: false };
-  }
-
+async function writeSurvivingSpzBytes(SpzWriter, spz, splatData, survivors) {
   const writer = new SpzWriter({
     numSplats: survivors.length,
     shDegree: spz.shDegree,
@@ -144,42 +147,81 @@ async function rewriteSpzBytes({ bytes, cropBoxMatrices, descriptors }) {
   survivors.forEach((sourceIndex, targetIndex) => {
     writer.setCenter(
       targetIndex,
-      centers[sourceIndex * 3],
-      centers[sourceIndex * 3 + 1],
-      centers[sourceIndex * 3 + 2],
+      splatData.centers[sourceIndex * 3],
+      splatData.centers[sourceIndex * 3 + 1],
+      splatData.centers[sourceIndex * 3 + 2],
     );
-    writer.setAlpha(targetIndex, alphas[sourceIndex]);
+    writer.setAlpha(targetIndex, splatData.alphas[sourceIndex]);
     writer.setRgb(
       targetIndex,
-      rgbs[sourceIndex * 3],
-      rgbs[sourceIndex * 3 + 1],
-      rgbs[sourceIndex * 3 + 2],
+      splatData.rgbs[sourceIndex * 3],
+      splatData.rgbs[sourceIndex * 3 + 1],
+      splatData.rgbs[sourceIndex * 3 + 2],
     );
     writer.setScale(
       targetIndex,
-      scales[sourceIndex * 3],
-      scales[sourceIndex * 3 + 1],
-      scales[sourceIndex * 3 + 2],
+      splatData.scales[sourceIndex * 3],
+      splatData.scales[sourceIndex * 3 + 1],
+      splatData.scales[sourceIndex * 3 + 2],
     );
     writer.setQuat(
       targetIndex,
-      quats[sourceIndex * 4],
-      quats[sourceIndex * 4 + 1],
-      quats[sourceIndex * 4 + 2],
-      quats[sourceIndex * 4 + 3],
+      splatData.quats[sourceIndex * 4],
+      splatData.quats[sourceIndex * 4 + 1],
+      splatData.quats[sourceIndex * 4 + 2],
+      splatData.quats[sourceIndex * 4 + 3],
     );
     if (spz.shDegree > 0) {
       writer.setSh(
         targetIndex,
-        copyShArray(sh1Values, 9, sourceIndex),
-        copyShArray(sh2Values, 15, sourceIndex),
-        copyShArray(sh3Values, 21, sourceIndex),
+        copyShArray(splatData.sh1Values, 9, sourceIndex),
+        copyShArray(splatData.sh2Values, 15, sourceIndex),
+        copyShArray(splatData.sh3Values, 21, sourceIndex),
       );
     }
   });
 
+  return Buffer.from(await writer.finalize());
+}
+
+function throwUnsupportedLodError() {
+  const err = new Error(
+    'SPZ files with built-in LOD flags are not supported for crop deletion yet.',
+  );
+  err.name = 'InspectorError';
+  throw err;
+}
+
+async function rewriteSpzBytes({ bytes, cropBoxMatrices, descriptors }) {
+  const { THREE, SpzReader, SpzWriter } = await getModules();
+  const spz = new SpzReader({ fileBytes: Buffer.from(bytes) });
+  await spz.parseHeader();
+  if (spz.flagLod) {
+    throwUnsupportedLodError();
+  }
+
+  const splatData = await readSpzData(spz);
+  const sourceToBoxMatrices = buildSourceToBoxMatrices(
+    THREE,
+    cropBoxMatrices,
+    descriptors,
+  );
+  const survivors = collectSurvivorIndices(
+    THREE,
+    splatData,
+    spz.numSplats,
+    sourceToBoxMatrices,
+  );
+  const deleted = spz.numSplats - survivors.length;
+  if (survivors.length === 0) {
+    return { bytes: null, deleted, empty: true };
+  }
+  if (deleted === 0) {
+    return { bytes: null, deleted: 0, empty: false };
+  }
+
   return {
-    bytes: Buffer.from(await writer.finalize()),
+    bytes: await writeSurvivingSpzBytes(SpzWriter, spz, splatData, survivors),
     deleted,
     empty: false,
   };

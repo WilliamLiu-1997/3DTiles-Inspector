@@ -7,7 +7,7 @@ const { spawn } = require('child_process');
 const { InspectorError } = require('../errors');
 const { resolveAndValidateTilesetPath } = require('../tileset-path');
 const {
-  deleteSplatsInBoxes,
+  deleteSplatsInNormalizedBoxes,
   normalizeSplatCropBoxes,
 } = require('./splatCrop');
 
@@ -535,7 +535,7 @@ async function saveViewerTransform(
     ? normalizeMatrix4Array(tileset.root.transform, 'tileset.root.transform')
     : cloneIdentityMatrix4();
   const nextRoot = multiplyMatrix4(normalizedEdit, currentRoot);
-  const cropResult = await deleteSplatsInBoxes(
+  const cropResult = await deleteSplatsInNormalizedBoxes(
     tilesetPath,
     nextRoot,
     splatCropBoxes,

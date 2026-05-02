@@ -1,8 +1,6 @@
 import {
   AmbientLight,
-  BoxGeometry,
   Color,
-  EdgesGeometry,
   MathUtils,
   Group,
   Matrix4,
@@ -15,14 +13,9 @@ import {
   Vector3,
   WebGLRenderer,
 } from 'three';
-import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
-import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
-import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import {
   SplatEdit,
   SplatEditRgbaBlendMode,
-  SplatEditSdf,
-  SplatEditSdfType,
 } from '@sparkjsdev/spark';
 import { TilesRenderer } from '3d-tiles-renderer';
 import {
@@ -50,6 +43,30 @@ import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { CameraController } from './cameraController.js';
+import {
+  CROP_BOX_DEFAULT_HALF_SIZE,
+  DEFAULT_CROP_TRANSFORM_MODE,
+  createCropBox as createCropBoxObject,
+  createCropBoxLineGeometry,
+  disposeCropBox,
+  normalizeCropBoxTransform,
+  setCropBoxSelectedStyle,
+  syncCropBoxSdf,
+} from './cropBox.js';
+import {
+  clamp,
+  composeMatrix,
+  exponentToGeometricErrorScale,
+  forceOpaqueScene,
+  formatBytes,
+  formatCoordinateInputValue,
+  formatGeometricErrorScale,
+  formatInteger,
+  getFiniteMatrix4Array,
+  mouseToCoords,
+  normalizeLocalResourceUrl,
+  setRaycasterFromCamera,
+} from './viewerUtils.js';
 
 const SAVE_URL = new URL('../__inspector/save-transform', import.meta.url).href;
 const SHUTDOWN_URL = new URL('../__inspector/shutdown', import.meta.url).href;
@@ -86,15 +103,6 @@ const MOVE_TO_TILES_HEADING = 0;
 const MOVE_TO_TILES_PITCH = MathUtils.degToRad(-30);
 const MOVE_TO_TILES_ROLL = 0;
 const MOVE_TO_COORDINATE_RADIUS = 10;
-const CROP_BOX_MIN_HALF_SIZE = 0.01;
-const CROP_BOX_DEFAULT_HALF_SIZE = 10;
-const CROP_BOX_SELECTED_COLOR = 0xffcf33;
-const CROP_BOX_DEFAULT_COLOR = 0x8f8f8f;
-const CROP_BOX_LINE_WIDTH = 1.5;
-const CROP_BOX_SELECTED_LINE_WIDTH = 2;
-const CROP_BOX_OVERLAY_OPACITY = 0.1;
-const CROP_BOX_SELECTED_OVERLAY_OPACITY = 0.2;
-const DEFAULT_CROP_TRANSFORM_MODE = 'scale';
 const SET_POSITION_CLICK_MAX_DISTANCE_PX = 2;
 const SET_POSITION_CLICK_MAX_DISTANCE_SQ =
   SET_POSITION_CLICK_MAX_DISTANCE_PX ** 2;
@@ -159,53 +167,6 @@ const DEFAULT_ERROR_TARGET = 16;
 const DEFAULT_TERRAIN_ERROR_TARGET = 16;
 const RUNTIME_STATS_UPDATE_INTERVAL_MS = 250;
 
-function normalizeLocalResourceUrl(value) {
-  if (typeof value !== 'string' || value.length === 0) {
-    return value;
-  }
-
-  if (value.startsWith('//')) {
-    return `/${value.replace(/^\/+/, '')}`;
-  }
-
-  if (value.startsWith('/')) {
-    return value.replace(/\/{2,}/g, '/');
-  }
-
-  if (/^[a-z][a-z\d+.-]*:/i.test(value)) {
-    try {
-      const parsed = new URL(value);
-      if (parsed.origin === window.location.origin) {
-        parsed.pathname = parsed.pathname.replace(/\/{2,}/g, '/');
-        return parsed.toString();
-      }
-    } catch (err) {
-      return value;
-    }
-  }
-
-  return value;
-}
-
-function forceOpaqueMaterial(material) {
-  if (!material) {
-    return;
-  }
-  if (Array.isArray(material)) {
-    material.forEach(forceOpaqueMaterial);
-    return;
-  }
-  material.transparent = false;
-}
-
-function forceOpaqueScene(root) {
-  root.traverse((child) => {
-    if (child.material) {
-      forceOpaqueMaterial(child.material);
-    }
-  });
-}
-
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
   statusEl.classList.toggle('error', !!isError);
@@ -235,20 +196,6 @@ function requestViewerShutdown() {
       keepalive: true,
     }).catch(() => {});
   }
-}
-
-function getFiniteMatrix4Array(value, name = 'matrix') {
-  if (!Array.isArray(value) || value.length !== 16) {
-    throw new Error(`${name} must be a 16-number matrix.`);
-  }
-
-  return value.map((entry, index) => {
-    const number = Number(entry);
-    if (!Number.isFinite(number)) {
-      throw new Error(`${name}[${index}] must be a finite number.`);
-    }
-    return number;
-  });
 }
 
 function parseCoordinateInputs() {
@@ -290,73 +237,6 @@ function updateModeButtons(mode) {
     rootActive && mode === 'translate',
   );
   rotateButton.classList.toggle('active', rootActive && mode === 'rotate');
-}
-
-function composeMatrix(target, matrix) {
-  matrix.decompose(target.position, target.quaternion, target.scale);
-  target.updateMatrix();
-  target.updateMatrixWorld(true);
-}
-
-function formatCoordinateInputValue(value, digits) {
-  return Number.isFinite(value) ? value.toFixed(digits) : '';
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function exponentToGeometricErrorScale(exponent) {
-  return 2 ** exponent;
-}
-
-function formatGeometricErrorScale(value) {
-  if (value < 0.1) {
-    return value.toFixed(3);
-  }
-
-  return value.toFixed(2);
-}
-
-function formatBytes(value) {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let next = Math.max(0, Number(value) || 0);
-  let unitIndex = 0;
-
-  while (next >= 1024 && unitIndex < units.length - 1) {
-    next /= 1024;
-    unitIndex++;
-  }
-
-  if (unitIndex === 0) {
-    return `${Math.round(next)} ${units[unitIndex]}`;
-  }
-
-  const digits = next >= 100 ? 0 : next >= 10 ? 1 : 2;
-  return `${next.toFixed(digits)} ${units[unitIndex]}`;
-}
-
-function formatInteger(value) {
-  return Math.max(0, Math.round(Number(value) || 0)).toLocaleString('en-US');
-}
-
-function setRaycasterFromCamera(raycaster, coords, camera) {
-  const { origin, direction } = raycaster.ray;
-  const nearZ = camera.reversedDepth ? 1 : -1;
-  const farZ = camera.reversedDepth ? 0 : 1;
-
-  origin.set(coords.x, coords.y, nearZ).unproject(camera);
-  direction.set(coords.x, coords.y, farZ).unproject(camera).sub(origin);
-  raycaster.near = 0;
-  raycaster.far = direction.length();
-  raycaster.camera = camera;
-  direction.normalize();
-}
-
-function mouseToCoords(clientX, clientY, element, target) {
-  const rect = element.getBoundingClientRect();
-  target.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-  target.y = -((clientY - rect.top) / rect.height) * 2 + 1;
 }
 
 const renderer = new WebGLRenderer({
@@ -412,11 +292,7 @@ const cropSplatEdit = new SplatEdit({
   softEdge: 0,
 });
 scene.add(cropSplatEdit);
-const cropBoxGeometry = new BoxGeometry(2, 2, 2);
-const cropBoxEdgesGeometry = new EdgesGeometry(cropBoxGeometry);
-const cropBoxLineGeometry = new LineSegmentsGeometry().fromEdgesGeometry(
-  cropBoxEdgesGeometry,
-);
+const cropBoxLineGeometry = createCropBoxLineGeometry();
 
 const cameraController = new CameraController(renderer, contentGroup, camera);
 let globeTiles = null;
@@ -833,22 +709,29 @@ function updateRuntimeStats(force = false) {
   tilesVisibleValueEl.textContent = formatInteger(visibleTiles);
 }
 
-function setTilesetHasGaussianSplats(hasGaussianSplats) {
-  const nextValue = Boolean(hasGaussianSplats);
-  const changed = tilesetHasGaussianSplats !== nextValue;
-  tilesetHasGaussianSplats = nextValue;
-
+function setGaussianSplatUiVisible(visible) {
   if (splatsCountStatEl) {
-    splatsCountStatEl.hidden = !tilesetHasGaussianSplats;
+    splatsCountStatEl.hidden = !visible;
   }
   if (cropSectionEl) {
-    cropSectionEl.hidden = !tilesetHasGaussianSplats;
+    cropSectionEl.hidden = !visible;
+  }
+}
+
+function resetGaussianSplatTilesetState() {
+  tilesetHasGaussianSplats = false;
+  setGaussianSplatUiVisible(false);
+  clearCropBoxes();
+  updateRuntimeStats(true);
+}
+
+function markTilesetHasGaussianSplats() {
+  if (tilesetHasGaussianSplats) {
+    return;
   }
 
-  if (!tilesetHasGaussianSplats && changed) {
-    clearCropBoxes();
-  }
-
+  tilesetHasGaussianSplats = true;
+  setGaussianSplatUiVisible(true);
   updateCropButtons();
   updateRuntimeStats(true);
 }
@@ -987,8 +870,8 @@ function syncTransformControlsState() {
 function setTransformMode(mode) {
   activeTransformMode = mode;
   if (mode !== null) {
+    clearCropSelection({ sync: false });
     activeTransformTarget = 'tiles';
-    activeCropTransformMode = null;
   } else if (activeTransformTarget === 'tiles') {
     activeTransformTarget = null;
   }
@@ -1277,43 +1160,6 @@ function syncCropEditSdfs() {
   });
 }
 
-function syncCropBoxSdf(box) {
-  box.root.updateMatrix();
-  box.root.updateMatrixWorld(true);
-  box.root.matrixWorld.decompose(
-    box.sdf.position,
-    box.sdf.quaternion,
-    box.sdf.scale,
-  );
-  box.sdf.updateMatrix();
-  box.sdf.updateMatrixWorld(true);
-}
-
-function normalizeCropBoxTransform(box) {
-  box.root.scale.set(
-    Math.max(Math.abs(box.root.scale.x), CROP_BOX_MIN_HALF_SIZE),
-    Math.max(Math.abs(box.root.scale.y), CROP_BOX_MIN_HALF_SIZE),
-    Math.max(Math.abs(box.root.scale.z), CROP_BOX_MIN_HALF_SIZE),
-  );
-  box.root.updateMatrix();
-  box.root.updateMatrixWorld(true);
-}
-
-function setCropBoxSelectedStyle(box, selected) {
-  const color = selected ? CROP_BOX_SELECTED_COLOR : CROP_BOX_DEFAULT_COLOR;
-  const linewidth = selected
-    ? CROP_BOX_SELECTED_LINE_WIDTH
-    : CROP_BOX_LINE_WIDTH;
-
-  box.edges.material.color.setHex(color);
-  box.edges.material.linewidth = linewidth;
-  box.overlayEdges.material.color.setHex(color);
-  box.overlayEdges.material.opacity = selected
-    ? CROP_BOX_SELECTED_OVERLAY_OPACITY
-    : CROP_BOX_OVERLAY_OPACITY;
-  box.overlayEdges.material.linewidth = linewidth;
-}
-
 function updateCropBoxVisualState() {
   cropBoxes.forEach((box) => {
     setCropBoxSelectedStyle(box, box.id === selectedCropBoxId);
@@ -1360,64 +1206,15 @@ function pushCropUndoSnapshot(snapshot = createCropSnapshot()) {
 }
 
 function createCropBox({ id, matrix }) {
-  const root = new Group();
-  root.name = `Crop Box ${id}`;
-  root.userData.cropBoxId = id;
-
-  const edges = new LineSegments2(
-    cropBoxLineGeometry,
-    new LineMaterial({
-      color: CROP_BOX_DEFAULT_COLOR,
-      linewidth: CROP_BOX_LINE_WIDTH,
-      transparent: false,
-    }),
-  );
-  edges.userData.cropBoxId = id;
-  const overlayEdges = new LineSegments2(
-    cropBoxLineGeometry,
-    new LineMaterial({
-      color: CROP_BOX_DEFAULT_COLOR,
-      depthTest: false,
-      depthWrite: false,
-      linewidth: CROP_BOX_LINE_WIDTH,
-      opacity: CROP_BOX_OVERLAY_OPACITY,
-      transparent: true,
-    }),
-  );
-  overlayEdges.renderOrder = Infinity;
-  overlayEdges.userData.cropBoxId = id;
-  root.add(edges);
-  root.add(overlayEdges);
-
-  const sdf = new SplatEditSdf({
-    type: SplatEditSdfType.BOX,
-    color: new Color(0xffffff),
-    opacity: 0,
-    radius: 0,
-  });
-
-  const box = {
-    edges,
+  const box = createCropBoxObject({
     id,
-    overlayEdges,
-    root,
-    sdf,
-  };
-
-  composeMatrix(root, new Matrix4().fromArray(matrix));
-  normalizeCropBoxTransform(box);
-  syncCropBoxSdf(box);
-  cropGroup.add(root);
+    lineGeometry: cropBoxLineGeometry,
+    matrix,
+  });
+  cropGroup.add(box.root);
   cropBoxes.push(box);
   syncCropEditSdfs();
   return box;
-}
-
-function disposeCropBox(box) {
-  box.sdf.removeFromParent();
-  cropGroup.remove(box.root);
-  box.edges.material.dispose();
-  box.overlayEdges.material.dispose();
 }
 
 function restoreCropSnapshot(snapshot) {
@@ -1477,6 +1274,11 @@ function updateCropList() {
     button.textContent = `Box ${index + 1}`;
     button.classList.toggle('active', box.id === selectedCropBoxId);
     button.addEventListener('click', () => {
+      if (box.id === selectedCropBoxId) {
+        clearCropSelection();
+        setStatus(`Deselected crop box ${index + 1}.`);
+        return;
+      }
       selectCropBox(box.id);
       if (!activeCropTransformMode) {
         setCropTransformMode(DEFAULT_CROP_TRANSFORM_MODE);
@@ -1498,7 +1300,8 @@ function updateCropButtons() {
   cropScaleButton.disabled = !hasSelectedBox;
   cropSetPositionButton.disabled = !hasSelectedBox;
   cropDeleteButton.disabled = !hasSelectedBox;
-  cropUndoButton.disabled = cropUndoStack.length === 0;
+  cropUndoButton.disabled =
+    !tilesetHasGaussianSplats || cropUndoStack.length === 0;
   cropMoveButton.classList.toggle(
     'active',
     cropActive && activeCropTransformMode === 'translate',
@@ -1538,11 +1341,27 @@ function toggleCropTransformMode(mode) {
   );
 }
 
+function clearCropSelection({ sync = true } = {}) {
+  selectedCropBoxId = null;
+  activeCropTransformMode = null;
+  pendingCropSetPosition = false;
+  setPositionPointerStart = null;
+  if (activeTransformTarget === 'crop') {
+    activeTransformTarget = null;
+  }
+  updateCropBoxVisualState();
+  if (sync) {
+    updateModeButtons(activeTransformMode);
+    updateCropButtons();
+    syncTransformControlsState();
+  }
+}
+
 function selectCropBox(id) {
   selectedCropBoxId = cropBoxes.some((box) => box.id === id) ? id : null;
-  if (!selectedCropBoxId && activeTransformTarget === 'crop') {
-    activeCropTransformMode = null;
-    activeTransformTarget = null;
+  if (!selectedCropBoxId) {
+    clearCropSelection();
+    return;
   }
   updateCropBoxVisualState();
   updateCropButtons();
@@ -1659,6 +1478,7 @@ function setSetPositionMode(active) {
     pendingCropSetPosition = false;
     setTransformMode(null);
     setCropTransformMode(null);
+    clearCropSelection({ sync: false });
   }
   syncPositionPickModeState();
 }
@@ -2227,10 +2047,7 @@ function loadTileset(url) {
     tiles = null;
     debugTilesPlugin = null;
   }
-  clearCropBoxes();
-  setTilesetHasGaussianSplats(false);
-
-  updateRuntimeStats(true);
+  resetGaussianSplatTilesetState();
 
   resetEditableGroup();
   lastSavedGeometricErrorScale = 1;
@@ -2295,7 +2112,7 @@ function loadTileset(url) {
   next.addEventListener('load-model', ({ scene: modelScene }) => {
     forceOpaqueScene(modelScene);
     if (isGaussianSplatScene(modelScene)) {
-      setTilesetHasGaussianSplats(true);
+      markTilesetHasGaussianSplats();
     }
     tilesTransformDirty = true;
   });

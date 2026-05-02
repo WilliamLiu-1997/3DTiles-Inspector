@@ -340,6 +340,14 @@ function writeJsonAtomic(filePath, value) {
   fs.renameSync(tempPath, filePath);
 }
 
+function readTilesetJson(filePath) {
+  const tileset = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  if (!tileset || typeof tileset !== 'object' || !tileset.root) {
+    throw new InspectorError(`${filePath} must contain a root object.`);
+  }
+  return tileset;
+}
+
 function getTileLocalTransform(THREE, tile) {
   const matrix = new THREE.Matrix4();
   if (Array.isArray(tile?.transform)) {
@@ -730,43 +738,85 @@ function addReplacement(replacements, replacement) {
   }
 }
 
+function getReplacementDelta(replacement) {
+  return replacement.bytes.length - (replacement.end - replacement.start);
+}
+
+function getOffsetDeltaBefore(replacements, originalOffset) {
+  let delta = 0;
+  replacements.forEach((replacement) => {
+    if (originalOffset > replacement.start) {
+      delta += getReplacementDelta(replacement);
+    }
+  });
+  return delta;
+}
+
+function collectBufferViewOffsets(resource, bufferIndex) {
+  const offsets = new Map();
+  resource.json.bufferViews?.forEach((view, viewIndex) => {
+    if (!view || typeof view !== 'object') {
+      return;
+    }
+    const viewBufferIndex = view.buffer == null ? 0 : view.buffer;
+    if (viewBufferIndex === bufferIndex) {
+      offsets.set(viewIndex, Number(view.byteOffset || 0));
+    }
+  });
+  return offsets;
+}
+
+function setBufferViewByteOffset(view, byteOffset) {
+  if (byteOffset === 0 && view.byteOffset == null) {
+    return;
+  }
+  view.byteOffset = byteOffset;
+}
+
 function applyBufferReplacements(resource, bufferIndex, replacements) {
   if (replacements.length === 0) {
     return false;
   }
 
   const record = loadResourceBuffer(resource, bufferIndex);
+  const originalOffsets = collectBufferViewOffsets(resource, bufferIndex);
+  const replacementByView = new Map(
+    replacements.map((replacement) => [
+      replacement.bufferViewIndex,
+      replacement,
+    ]),
+  );
   const parts = [];
   let cursor = 0;
-  let delta = 0;
 
   replacements.forEach((replacement) => {
     parts.push(record.bytes.subarray(cursor, replacement.start));
     parts.push(Buffer.from(replacement.bytes));
     cursor = replacement.end;
-
-    const view = resource.json.bufferViews[replacement.bufferViewIndex];
-    view.byteOffset = replacement.start + delta;
-    view.byteLength = replacement.bytes.length;
-    const localDelta = replacement.bytes.length - (replacement.end - replacement.start);
-
-    resource.json.bufferViews.forEach((otherView, otherIndex) => {
-      if (
-        otherIndex !== replacement.bufferViewIndex &&
-        otherView &&
-        (otherView.buffer == null ? 0 : otherView.buffer) === bufferIndex &&
-        Number(otherView.byteOffset || 0) > replacement.start
-      ) {
-        otherView.byteOffset = Number(otherView.byteOffset || 0) + localDelta;
-      }
-    });
-    delta += localDelta;
   });
 
   parts.push(record.bytes.subarray(cursor));
   record.bytes = Buffer.concat(parts);
   const bufferDef = resource.json.buffers[bufferIndex];
   bufferDef.byteLength = record.bytes.length;
+
+  originalOffsets.forEach((originalOffset, viewIndex) => {
+    const view = resource.json.bufferViews[viewIndex];
+    const replacement = replacementByView.get(viewIndex);
+    if (replacement) {
+      setBufferViewByteOffset(
+        view,
+        replacement.start + getOffsetDeltaBefore(replacements, originalOffset),
+      );
+      view.byteLength = replacement.bytes.length;
+      return;
+    }
+
+    setBufferViewByteOffset(
+      view,
+      originalOffset + getOffsetDeltaBefore(replacements, originalOffset),
+    );
+  });
 
   if (record.embedded) {
     resource.embeddedBin = record.bytes;
@@ -971,9 +1021,195 @@ async function processGltfResource({
   };
 }
 
+function createContentSlotResult(slot, overrides = {}) {
+  return {
+    deletedSplats: 0,
+    processedSplatResources: 0,
+    removeSlot: false,
+    slot,
+    ...overrides,
+  };
+}
+
+function addContentResultToTraversal(context, result) {
+  context.deletedSplats += result.deletedSplats;
+  context.processedSplatResources += result.processedSplatResources;
+}
+
+function withProcessedResourceCount(context, resourcePath, result) {
+  const processedSplatResource =
+    result.processed && !context.processedResources.has(resourcePath) ? 1 : 0;
+  if (processedSplatResource) {
+    context.processedResources.add(resourcePath);
+  }
+  return {
+    ...result,
+    processedSplatResource,
+  };
+}
+
+async function processLockedSplatResource(context, resourcePath, tileSceneMatrix) {
+  const cachedEmptyResource = context.emptySplatResources.get(resourcePath);
+  if (cachedEmptyResource) {
+    return withProcessedResourceCount(context, resourcePath, {
+      deletedSplats: 0,
+      empty: true,
+      processed: cachedEmptyResource.processed,
+    });
+  }
+
+  const result = await processGltfResource({
+    THREE: context.THREE,
+    filePath: resourcePath,
+    rootDir: context.rootDir,
+    tileSceneMatrix,
+    cropBoxMatrices: context.cropBoxMatrices,
+    workerPool: context.workerPool,
+  });
+  if (result.empty) {
+    context.emptySplatResources.set(resourcePath, {
+      processed: result.processed,
+    });
+  }
+  return withProcessedResourceCount(context, resourcePath, result);
+}
+
+async function processGltfContentSlot(context, slot, uri, tileTransform) {
+  const resourcePath = resolveLocalUri(
+    context.tilesetDir,
+    context.rootDir,
+    uri,
+    'Splat content URI',
+  );
+  const tileSceneMatrix = tileTransform.clone().multiply(context.upRotationMatrix);
+  const resourceResult = await runWithResourceLock(
+    context.resourceLocks,
+    resourcePath,
+    () => processLockedSplatResource(context, resourcePath, tileSceneMatrix),
+  );
+
+  return createContentSlotResult(slot, {
+    deletedSplats: resourceResult.deletedSplats,
+    processedSplatResources: resourceResult.processedSplatResource,
+    removeSlot: resourceResult.empty,
+  });
+}
+
+async function processNestedTilesetContentSlot(
+  context,
+  slot,
+  uri,
+  tileTransform,
+) {
+  const childTilesetPath = resolveLocalUri(
+    context.tilesetDir,
+    context.rootDir,
+    uri,
+    'Nested tileset content URI',
+  );
+  const childResult = await traverseTileset({
+    THREE: context.THREE,
+    tilesetPath: childTilesetPath,
+    rootDir: context.rootDir,
+    upRotationMatrix: context.upRotationMatrix,
+    rootTransform: null,
+    cropBoxMatrices: context.cropBoxMatrices,
+    parentTransform: tileTransform,
+    visitedTilesets: context.visitedTilesets,
+    processedResources: context.processedResources,
+    emptySplatResources: context.emptySplatResources,
+    resourceLocks: context.resourceLocks,
+    workerPool: context.workerPool,
+  });
+
+  return createContentSlotResult(slot, {
+    deletedSplats: childResult.deletedSplats,
+    processedSplatResources: childResult.processedSplatResources,
+    removeSlot: childResult.rootEmpty,
+  });
+}
+
+async function processContentSlot(context, slot, tileTransform) {
+  const uri = getContentUri(slot.content);
+  if (typeof uri !== 'string' || uri.length === 0) {
+    return createContentSlotResult(slot);
+  }
+
+  if (isRemoteOrProtocolUri(uri)) {
+    throw new InspectorError(`Remote content is not supported for crop save: ${uri}`);
+  }
+
+  const extension = path.extname(stripUriSuffix(uri)).toLowerCase();
+  if (extension === '.json') {
+    return processNestedTilesetContentSlot(context, slot, uri, tileTransform);
+  }
+  if (extension === '.gltf' || extension === '.glb') {
+    return processGltfContentSlot(context, slot, uri, tileTransform);
+  }
+
+  return createContentSlotResult(slot);
+}
+
+function applyContentResultsToTile(context, tile, contentResults) {
+  contentResults.forEach((result) => {
+    addContentResultToTraversal(context, result);
+    if (result.removeSlot && removeContentSlot(tile, result.slot)) {
+      context.tilesetModified = true;
+    }
+  });
+}
+
+async function pruneEmptyChildren(context, tile, tileTransform) {
+  if (!Array.isArray(tile.children)) {
+    return;
+  }
+
+  const children = tile.children.slice();
+  const childResults = await Promise.all(
+    children.map(async (child) => ({
+      child,
+      result: await visitTilesetTile(context, child, tileTransform, false),
+    })),
+  );
+  const keptChildren = [];
+  childResults.forEach(({ child, result }) => {
+    if (result.empty) {
+      context.tilesetModified = true;
+    } else {
+      keptChildren.push(child);
+    }
+  });
+
+  if (keptChildren.length === 0) {
+    if (tile.children.length > 0) {
+      context.tilesetModified = true;
+    }
+    delete tile.children;
+  } else if (keptChildren.length !== tile.children.length) {
+    tile.children = keptChildren;
+  }
+}
+
+async function visitTilesetTile(context, tile, inheritedTransform, isRootTile) {
+  const tileTransform =
+    isRootTile && context.rootTransform
+      ? new context.THREE.Matrix4().fromArray(context.rootTransform)
+      : getTileWorldTransform(context.THREE, tile, inheritedTransform);
+  const contentResults = await Promise.all(
+    getContentSlots(tile).map((slot) =>
+      processContentSlot(context, slot, tileTransform),
+    ),
+  );
+
+  applyContentResultsToTile(context, tile, contentResults);
+  await pruneEmptyChildren(context, tile, tileTransform);
+  return { empty: tileIsEmpty(tile) };
+}
+
 async function traverseTileset({
   THREE,
   tilesetPath,
+  tileset = null,
   rootDir,
   upRotationMatrix,
   rootTransform,
@@ -999,182 +1235,49 @@ async function traverseTileset({
   }
   visitedTilesets.add(resolvedTilesetPath);
 
-  const tileset = JSON.parse(fs.readFileSync(resolvedTilesetPath, 'utf8'));
-  if (!tileset || typeof tileset !== 'object' || !tileset.root) {
+  const tilesetJson = tileset || readTilesetJson(resolvedTilesetPath);
+  if (!tilesetJson || typeof tilesetJson !== 'object' || !tilesetJson.root) {
     throw new InspectorError(`${resolvedTilesetPath} must contain a root object.`);
   }
 
-  const tilesetDir = path.dirname(resolvedTilesetPath);
-  let deletedSplats = 0;
-  let processedSplatResources = 0;
-  let tilesetModified = false;
+  const context = {
+    THREE,
+    cropBoxMatrices,
+    deletedSplats: 0,
+    emptySplatResources,
+    processedResources,
+    processedSplatResources: 0,
+    resourceLocks,
+    rootDir,
+    rootTransform,
+    tilesetDir: path.dirname(resolvedTilesetPath),
+    tilesetModified: false,
+    upRotationMatrix,
+    visitedTilesets,
+    workerPool,
+  };
+  const rootResult = await visitTilesetTile(
+    context,
+    tilesetJson.root,
+    parentTransform,
+    true,
+  );
 
-  async function visitTile(tile, inheritedTransform, isRootTile) {
-    const tileTransform = isRootTile && rootTransform
-      ? new THREE.Matrix4().fromArray(rootTransform)
-      : getTileWorldTransform(THREE, tile, inheritedTransform);
-
-    const contentResults = await Promise.all(getContentSlots(tile).map(async (slot) => {
-      const { content } = slot;
-      const uri = getContentUri(content);
-      if (typeof uri !== 'string' || uri.length === 0) {
-        return {
-          deletedSplats: 0,
-          processedSplatResources: 0,
-          removeSlot: false,
-          slot,
-        };
-      }
-
-      if (isRemoteOrProtocolUri(uri)) {
-        throw new InspectorError(`Remote content is not supported for crop save: ${uri}`);
-      }
-
-      const normalizedUri = stripUriSuffix(uri);
-      const extension = path.extname(normalizedUri).toLowerCase();
-      if (extension === '.json') {
-        const childTilesetPath = resolveLocalUri(
-          tilesetDir,
-          rootDir,
-          uri,
-          'Nested tileset content URI',
-        );
-        const childResult = await traverseTileset({
-          THREE,
-          tilesetPath: childTilesetPath,
-          rootDir,
-          upRotationMatrix,
-          rootTransform: null,
-          cropBoxMatrices,
-          parentTransform: tileTransform,
-          visitedTilesets,
-          processedResources,
-          emptySplatResources,
-          resourceLocks,
-          workerPool,
-        });
-        return {
-          deletedSplats: childResult.deletedSplats,
-          processedSplatResources: childResult.processedSplatResources,
-          removeSlot: childResult.rootEmpty,
-          slot,
-        };
-      } else if (extension === '.gltf' || extension === '.glb') {
-        const resourcePath = resolveLocalUri(
-          tilesetDir,
-          rootDir,
-          uri,
-          'Splat content URI',
-        );
-        const tileSceneMatrix = tileTransform.clone().multiply(upRotationMatrix);
-        const resourceResult = await runWithResourceLock(
-          resourceLocks,
-          resourcePath,
-          async () => {
-            const withProcessedResourceCount = (result) => {
-              const processedSplatResource =
-                result.processed && !processedResources.has(resourcePath)
-                  ? 1
-                  : 0;
-              if (processedSplatResource) {
-                processedResources.add(resourcePath);
-              }
-              return {
-                ...result,
-                processedSplatResource,
-              };
-            };
-            const cachedEmptyResource = emptySplatResources.get(resourcePath);
-            if (cachedEmptyResource) {
-              return withProcessedResourceCount({
-                deletedSplats: 0,
-                empty: true,
-                processed: cachedEmptyResource.processed,
-              });
-            }
-
-            const next = await processGltfResource({
-              THREE,
-              filePath: resourcePath,
-              rootDir,
-              tileSceneMatrix,
-              cropBoxMatrices,
-              workerPool,
-            });
-            if (next.empty) {
-              emptySplatResources.set(resourcePath, {
-                processed: next.processed,
-              });
-            }
-            return withProcessedResourceCount(next);
-          },
-        );
-        return {
-          deletedSplats: resourceResult.deletedSplats,
-          processedSplatResources: resourceResult.processedSplatResource,
-          removeSlot: resourceResult.empty,
-          slot,
-        };
-      }
-
-      return {
-        deletedSplats: 0,
-        processedSplatResources: 0,
-        removeSlot: false,
-        slot,
-      };
-    }));
-
-    contentResults.forEach((result) => {
-      deletedSplats += result.deletedSplats;
-      processedSplatResources += result.processedSplatResources;
-      if (result.removeSlot && removeContentSlot(tile, result.slot)) {
-        tilesetModified = true;
-      }
-    });
-
-    if (Array.isArray(tile.children)) {
-      const children = tile.children.slice();
-      const childResults = await Promise.all(
-        children.map(async (child) => ({
-          child,
-          result: await visitTile(child, tileTransform, false),
-        })),
-      );
-      const keptChildren = [];
-      childResults.forEach(({ child, result: childResult }) => {
-        if (childResult.empty) {
-          tilesetModified = true;
-        } else {
-          keptChildren.push(child);
-        }
-      });
-      if (keptChildren.length === 0) {
-        if (tile.children.length > 0) {
-          tilesetModified = true;
-        }
-        delete tile.children;
-      } else if (keptChildren.length !== tile.children.length) {
-        tile.children = keptChildren;
-      }
-    }
-
-    return { empty: tileIsEmpty(tile) };
-  }
-
-  const rootResult = await visitTile(tileset.root, parentTransform, true);
-  if (tilesetModified) {
-    writeJsonAtomic(resolvedTilesetPath, tileset);
+  if (context.tilesetModified) {
+    writeJsonAtomic(resolvedTilesetPath, tilesetJson);
   }
   return {
-    deletedSplats,
-    processedSplatResources,
+    deletedSplats: context.deletedSplats,
+    processedSplatResources: context.processedSplatResources,
     rootEmpty: rootResult.empty,
   };
 }
 
-async function deleteSplatsInBoxes(rootTilesetPath, rootTransform, splatCropBoxes) {
-  const normalizedBoxes = normalizeSplatCropBoxes(splatCropBoxes);
+async function deleteSplatsInNormalizedBoxes(
+  rootTilesetPath,
+  rootTransform,
+  normalizedBoxes,
+) {
   if (normalizedBoxes.length === 0) {
     return {
       deletedSplats: 0,
@@ -1187,11 +1290,7 @@ async function deleteSplatsInBoxes(rootTilesetPath, rootTransform, splatCropBoxe
   assertPathInsideRoot(tilesetPath, rootDir, 'Root tileset path');
 
   const { THREE } = await getSplatCropModules();
-  const rootTileset = JSON.parse(fs.readFileSync(tilesetPath, 'utf8'));
-  if (!rootTileset || typeof rootTileset !== 'object' || !rootTileset.root) {
-    throw new InspectorError(`${tilesetPath} must contain a root object.`);
-  }
-
+  const rootTileset = readTilesetJson(tilesetPath);
   const upRotationMatrix = getRootUpRotationMatrix(THREE, rootTileset);
   const cropBoxMatrices = normalizedBoxes.map((box, index) => {
     const matrix = new THREE.Matrix4().fromArray(box.matrix);
@@ -1209,6 +1308,7 @@ async function deleteSplatsInBoxes(rootTilesetPath, rootTransform, splatCropBoxe
     return await traverseTileset({
       THREE,
       tilesetPath,
+      tileset: rootTileset,
       rootDir,
       upRotationMatrix,
       rootTransform:
@@ -1228,7 +1328,16 @@ async function deleteSplatsInBoxes(rootTilesetPath, rootTransform, splatCropBoxe
   }
 }
 
+function deleteSplatsInBoxes(rootTilesetPath, rootTransform, splatCropBoxes) {
+  return deleteSplatsInNormalizedBoxes(
+    rootTilesetPath,
+    rootTransform,
+    normalizeSplatCropBoxes(splatCropBoxes),
+  );
+}
+
 module.exports = {
   deleteSplatsInBoxes,
+  deleteSplatsInNormalizedBoxes,
   normalizeSplatCropBoxes,
 };
