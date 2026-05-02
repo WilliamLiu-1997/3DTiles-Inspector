@@ -1,53 +1,9 @@
-import {
-  AmbientLight,
-  Color,
-  MathUtils,
-  Group,
-  Matrix4,
-  PerspectiveCamera,
-  Quaternion,
-  Raycaster,
-  Scene,
-  Sphere,
-  Vector2,
-  Vector3,
-  WebGLRenderer,
-} from 'three';
-import {
-  SplatEdit,
-  SplatEditRgbaBlendMode,
-} from '@sparkjsdev/spark';
-import { TilesRenderer } from '3d-tiles-renderer';
-import {
-  GLTFExtensionsPlugin,
-  ImplicitTilingPlugin,
-  TileCompressionPlugin,
-  TilesFadePlugin,
-  UnloadTilesPlugin,
-  XYZTilesPlugin,
-} from '3d-tiles-renderer/plugins';
-import {
-  CesiumIonAuthPlugin,
-  DebugTilesPlugin,
-  ImageOverlayPlugin,
-  QuantizedMeshPlugin,
-  XYZTilesOverlay,
-} from '3d-tiles-renderer/three/plugins';
-import {
-  GaussianSplatPlugin,
-  isGaussianSplatScene,
-} from '3d-tiles-rendererjs-3dgs-plugin';
-import { Ion } from 'cesium';
-import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
-import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
-import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
-import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { CameraController } from './cameraController.js';
+import { Matrix4, Quaternion, Raycaster, Sphere, Vector2, Vector3 } from 'three';
+import { isGaussianSplatScene } from '3d-tiles-rendererjs-3dgs-plugin';
 import {
   CROP_BOX_DEFAULT_HALF_SIZE,
   DEFAULT_CROP_TRANSFORM_MODE,
   createCropBox as createCropBoxObject,
-  createCropBoxLineGeometry,
   disposeCropBox,
   normalizeCropBoxTransform,
   setCropBoxSelectedStyle,
@@ -55,179 +11,101 @@ import {
 } from './cropBox.js';
 import {
   clamp,
-  composeMatrix,
-  exponentToGeometricErrorScale,
   forceOpaqueScene,
-  formatBytes,
-  formatCoordinateInputValue,
-  formatGeometricErrorScale,
-  formatInteger,
-  getFiniteMatrix4Array,
   mouseToCoords,
   normalizeLocalResourceUrl,
   setRaycasterFromCamera,
 } from './viewerUtils.js';
+import {
+  applyEditableMatrixFromRootTransform,
+  applySavedObjectMatrix,
+  getIncrementalMatrix,
+  getObjectMatrix,
+  getRootTransform,
+  refreshLoadedTileSceneMatrices,
+  refreshSavedRootMatrix,
+  resetEditableObjectTransform,
+  setSavedRootMatrixFromTransform,
+  updateTilesRendererGroupMatrices,
+} from './tilesetTransform.js';
+import { postSaveTransform } from './saveTransformRequest.js';
+import {
+  parseCoordinateInputs as parseCoordinateInputValues,
+  setCoordinateInputs,
+} from './coordinateInputs.js';
+import { createRuntimeStats } from './runtimeStats.js';
+import { createGeoCameraController } from './geoCamera.js';
+import { createGeometricErrorController } from './geometricError.js';
+import { createGlobeController } from './globeController.js';
+import { updateCropBoxControls } from './cropBoxUi.js';
+import { createViewerScene } from './sceneSetup.js';
+import { createViewerTransformControls } from './transformControls.js';
+import { bindViewerEvents } from './viewerEvents.js';
+import { createViewerShutdownRequester } from './viewerShutdown.js';
+import { createSetPositionPointerTracker } from './setPositionPointerTracker.js';
+import {
+  DEFAULT_ERROR_TARGET,
+  createInspectorTilesRenderer,
+} from './tiles.js';
+import {
+  BASIS_TRANSCODER_PATH,
+  CAMERA_CENTER_MODE_DISTANCE_SQ,
+  DRACO_DECODER_PATH,
+  MOVE_TO_COORDINATE_RADIUS,
+  MOVE_TO_TILES_HEADING,
+  MOVE_TO_TILES_PITCH,
+  MOVE_TO_TILES_ROLL,
+  ROOT_TILESET_LABEL,
+  SAVE_URL,
+  SET_POSITION_CLICK_MAX_DISTANCE_SQ,
+  SHUTDOWN_URL,
+  TILESET_URL,
+} from './viewerConfig.js';
+import { getViewerElements } from './domElements.js';
 
-const SAVE_URL = new URL('../__inspector/save-transform', import.meta.url).href;
-const SHUTDOWN_URL = new URL('../__inspector/shutdown', import.meta.url).href;
-const VIEWER_CONFIG =
-  globalThis.__TILES_INSPECTOR_CONFIG__ &&
-  typeof globalThis.__TILES_INSPECTOR_CONFIG__ === 'object'
-    ? globalThis.__TILES_INSPECTOR_CONFIG__
-    : {};
-const ROOT_TILESET_LABEL =
-  typeof VIEWER_CONFIG.tilesetLabel === 'string' &&
-  VIEWER_CONFIG.tilesetLabel.length > 0
-    ? VIEWER_CONFIG.tilesetLabel
-    : 'tileset.json';
-const TILESET_URL = normalizeLocalResourceUrl(
-  VIEWER_CONFIG.tilesetUrl || new URL('../tileset.json', import.meta.url).href,
-);
-const THREE_EXAMPLES_BASE_URL = new URL(
-  './vendor/three/examples/jsm/',
-  import.meta.url,
-).href;
-const DRACO_DECODER_PATH = `${THREE_EXAMPLES_BASE_URL}libs/draco/gltf/`;
-const BASIS_TRANSCODER_PATH = `${THREE_EXAMPLES_BASE_URL}libs/basis/`;
-const SATELLITE_IMAGERY = {
-  url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-  levels: 18,
-};
-const CESIUM_ION_TERRAIN = {
-  apiToken: Ion.defaultAccessToken,
-  assetId: 1,
-};
-const CAMERA_CENTER_MODE_DISTANCE = 3000000;
-const CAMERA_CENTER_MODE_DISTANCE_SQ = CAMERA_CENTER_MODE_DISTANCE ** 2;
-const MOVE_TO_TILES_HEADING = 0;
-const MOVE_TO_TILES_PITCH = MathUtils.degToRad(-30);
-const MOVE_TO_TILES_ROLL = 0;
-const MOVE_TO_COORDINATE_RADIUS = 10;
-const SET_POSITION_CLICK_MAX_DISTANCE_PX = 2;
-const SET_POSITION_CLICK_MAX_DISTANCE_SQ =
-  SET_POSITION_CLICK_MAX_DISTANCE_PX ** 2;
-
-const statusEl = document.getElementById('status');
-const cacheBytesValueEl = document.getElementById('cache-bytes-value');
-const splatsCountStatEl = document.getElementById('splats-count-stat');
-const splatsCountValueEl = document.getElementById('splats-count-value');
-const tilesDownloadingValueEl = document.getElementById(
-  'tiles-downloading-value',
-);
-const tilesParsingValueEl = document.getElementById('tiles-parsing-value');
-const tilesLoadedValueEl = document.getElementById('tiles-loaded-value');
-const tilesVisibleValueEl = document.getElementById('tiles-visible-value');
-const toolbarEl = document.getElementById('toolbar');
-const toolbarDockEl = toolbarEl.parentElement;
-const toolbarToggleButton = document.getElementById('toolbar-toggle');
-const translateButton = document.getElementById('translate');
-const rotateButton = document.getElementById('rotate');
-const cropAddButton = document.getElementById('crop-add');
-const cropMoveButton = document.getElementById('crop-move');
-const cropRotateButton = document.getElementById('crop-rotate');
-const cropScaleButton = document.getElementById('crop-scale');
-const cropSetPositionButton = document.getElementById('crop-set-position');
-const cropDeleteButton = document.getElementById('crop-delete');
-const cropUndoButton = document.getElementById('crop-undo');
-const cropSectionEl = document.getElementById('crop-section');
-const cropCountValueEl = document.getElementById('crop-count-value');
-const cropListEl = document.getElementById('crop-list');
-const moveToTilesButton = document.getElementById('move-to-tiles');
-const terrainButton = document.getElementById('terrain');
-const boundingVolumeButton = document.getElementById('bounding-volume');
-const latitudeInput = document.getElementById('latitude');
-const longitudeInput = document.getElementById('longitude');
-const heightInput = document.getElementById('height');
-const moveCameraToCoordinateButton = document.getElementById(
-  'move-camera-to-coordinate',
-);
-const moveTilesToCoordinateButton = document.getElementById(
-  'move-tiles-to-coordinate',
-);
-const geometricErrorScaleInput = document.getElementById(
-  'geometric-error-scale',
-);
-const geometricErrorValueEl = document.getElementById('geometric-error-value');
-const geometricErrorLayerScaleInput = document.getElementById(
-  'geometric-error-layer-scale',
-);
-const geometricErrorLayerValueEl = document.getElementById(
-  'geometric-error-layer-value',
-);
-const setPositionButton = document.getElementById('set-position');
-const resetButton = document.getElementById('reset');
-const saveButton = document.getElementById('save');
-const GEOMETRIC_ERROR_SCALE_MIN_EXPONENT = -4;
-const GEOMETRIC_ERROR_SCALE_MAX_EXPONENT = 4;
-const GEOMETRIC_ERROR_SCALE_STEP = 0.1;
-const GEOMETRIC_ERROR_LAYER_SCALE_MIN_EXPONENT = -3;
-const GEOMETRIC_ERROR_LAYER_SCALE_MAX_EXPONENT = 3;
-const GEOMETRIC_ERROR_LAYER_SCALE_STEP = 0.1;
-const DEFAULT_ERROR_TARGET = 16;
-const DEFAULT_TERRAIN_ERROR_TARGET = 16;
-const RUNTIME_STATS_UPDATE_INTERVAL_MS = 250;
+const viewerElements = getViewerElements();
+const {
+  boundingVolumeButton,
+  cacheBytesValueEl,
+  cropSectionEl,
+  geometricErrorLayerScaleInput,
+  geometricErrorLayerValueEl,
+  geometricErrorScaleInput,
+  geometricErrorValueEl,
+  heightInput,
+  latitudeInput,
+  longitudeInput,
+  rotateButton,
+  saveButton,
+  setPositionButton,
+  splatsCountStatEl,
+  splatsCountValueEl,
+  statusEl,
+  terrainButton,
+  tilesDownloadingValueEl,
+  tilesLoadedValueEl,
+  tilesParsingValueEl,
+  tilesVisibleValueEl,
+  toolbarDockEl,
+  toolbarEl,
+  toolbarToggleButton,
+  translateButton,
+} = viewerElements;
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
   statusEl.classList.toggle('error', !!isError);
 }
 
-let shutdownRequested = false;
-
-function requestViewerShutdown() {
-  if (shutdownRequested) {
-    return;
-  }
-  shutdownRequested = true;
-
-  let sent = false;
-  try {
-    if (navigator.sendBeacon) {
-      sent = navigator.sendBeacon(SHUTDOWN_URL, '');
-    }
-  } catch (err) {
-    sent = false;
-  }
-
-  if (!sent) {
-    fetch(SHUTDOWN_URL, {
-      method: 'POST',
-      body: '',
-      keepalive: true,
-    }).catch(() => {});
-  }
-}
+const requestViewerShutdown = createViewerShutdownRequester(SHUTDOWN_URL);
 
 function parseCoordinateInputs() {
-  const latitude = Number(latitudeInput.value);
-  const longitude = Number(longitudeInput.value);
-  const height = Number(heightInput.value);
-
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-    setStatus('Latitude and longitude must be valid numbers.', true);
-    return null;
-  }
-
-  if (!Number.isFinite(height)) {
-    setStatus('Height must be a valid number.', true);
-    return null;
-  }
-
-  if (latitude < -90 || latitude > 90) {
-    setStatus('Latitude must be in [-90, 90].', true);
-    return null;
-  }
-
-  if (longitude < -180 || longitude > 180) {
-    setStatus('Longitude must be in [-180, 180].', true);
-    return null;
-  }
-
-  return {
-    height,
-    latitude,
-    longitude,
-  };
+  return parseCoordinateInputValues({
+    heightInput,
+    latitudeInput,
+    longitudeInput,
+    setStatus,
+  });
 }
 
 function updateModeButtons(mode) {
@@ -239,199 +117,69 @@ function updateModeButtons(mode) {
   rotateButton.classList.toggle('active', rootActive && mode === 'rotate');
 }
 
-const renderer = new WebGLRenderer({
-  antialias: false,
-  alpha: true,
-  premultipliedAlpha: true,
-  reversedDepthBuffer: true,
+const {
+  camera,
+  cameraController,
+  cropBoxLineGeometry,
+  cropGroup,
+  cropSplatEdit,
+  dracoLoader,
+  editableGroup,
+  globeGroup,
+  ktx2Loader,
+  renderer,
+  scene,
+  terrainLight,
+  transformHandle,
+} = createViewerScene({
+  basisTranscoderPath: BASIS_TRANSCODER_PATH,
+  container: document.getElementById('app'),
+  dracoDecoderPath: DRACO_DECODER_PATH,
 });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
-document.getElementById('app').appendChild(renderer.domElement);
-
-const dracoLoader = new DRACOLoader();
-dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
-
-const ktx2Loader = new KTX2Loader();
-ktx2Loader.setTranscoderPath(BASIS_TRANSCODER_PATH);
-ktx2Loader.detectSupport(renderer);
-
-const scene = new Scene();
-scene.background = new Color(0xffffff);
-
-const terrainLight = new AmbientLight(0xffffff, Math.PI);
-terrainLight.visible = false;
-scene.add(terrainLight);
-
-const camera = new PerspectiveCamera(
-  60,
-  window.innerWidth / window.innerHeight,
-  1,
-  2e7,
-);
-camera.position.set(0, 0, 1.75e7);
-camera.updateMatrixWorld(true);
-
-const contentGroup = new Group();
-scene.add(contentGroup);
-
-const globeGroup = new Group();
-contentGroup.add(globeGroup);
-
-const editableGroup = new Group();
-contentGroup.add(editableGroup);
-const transformHandle = new Group();
-scene.add(transformHandle);
-const cropGroup = new Group();
-cropGroup.name = 'Crop Boxes';
-scene.add(cropGroup);
-const cropSplatEdit = new SplatEdit({
-  name: 'Crop Box Preview Hide',
-  rgbaBlendMode: SplatEditRgbaBlendMode.MULTIPLY,
-  sdfSmooth: 0,
-  softEdge: 0,
+const globeController = createGlobeController({
+  camera,
+  globeGroup,
+  onTilesChanged: () => {
+    cameraController.setEllipsoid(getActiveEllipsoid());
+  },
+  renderer,
 });
-scene.add(cropSplatEdit);
-const cropBoxLineGeometry = createCropBoxLineGeometry();
 
-const cameraController = new CameraController(renderer, contentGroup, camera);
-let globeTiles = null;
-let terrainEnabled = true;
-
-function configureGlobeTiles(next) {
-  next.registerPlugin(new TilesFadePlugin());
-  next.registerPlugin(new TileCompressionPlugin());
-  next.registerPlugin(new UnloadTilesPlugin());
-  next.preprocessURL = normalizeLocalResourceUrl;
-  next.setCamera(camera);
-  next.setResolutionFromRenderer(camera, renderer);
-  next.addEventListener('load-model', ({ scene: modelScene }) => {
-    forceOpaqueScene(modelScene);
-  });
-  return next;
-}
-
-function createImageryGlobeTiles() {
-  const next = new TilesRenderer();
-  next.downloadQueue.maxJobs = 8;
-  next.parseQueue.maxJobs = 2;
-  next.registerPlugin(
-    new XYZTilesPlugin({
-      shape: 'ellipsoid',
-      center: true,
-      levels: SATELLITE_IMAGERY.levels,
-      url: SATELLITE_IMAGERY.url,
-    }),
-  );
-  configureGlobeTiles(next);
-  next.errorTarget = DEFAULT_ERROR_TARGET;
-  return next;
-}
-
-function createTerrainGlobeTiles() {
-  const next = new TilesRenderer();
-  next.downloadQueue.maxJobs = 8;
-  next.parseQueue.maxJobs = 2;
-  next.registerPlugin(
-    new CesiumIonAuthPlugin({
-      apiToken: CESIUM_ION_TERRAIN.apiToken,
-      assetId: String(CESIUM_ION_TERRAIN.assetId),
-      autoRefreshToken: true,
-      assetTypeHandler: (type, tilesRenderer) => {
-        if (type === 'TERRAIN') {
-          tilesRenderer.registerPlugin(new QuantizedMeshPlugin({}));
+const { transformControls, transformControlsHelper } =
+  createViewerTransformControls({
+    camera,
+    cameraController,
+    domElement: renderer.domElement,
+    scene,
+    transformHandle,
+    callbacks: {
+      createCropSnapshot,
+      onCropObjectChange: () => {
+        const selectedBox = getSelectedCropBox();
+        if (selectedBox) {
+          normalizeCropBoxTransform(selectedBox);
+          syncCropBoxSdf(selectedBox);
+          updateCropBoxVisualState();
         }
       },
-    }),
-  );
-  next.registerPlugin(
-    new ImageOverlayPlugin({
-      renderer,
-      overlays: [
-        new XYZTilesOverlay({
-          url: SATELLITE_IMAGERY.url,
-          levels: SATELLITE_IMAGERY.levels,
-          tileDimension: 256,
-          projection: 'EPSG:3857',
-          color: 0xffffff,
-          opacity: 1,
-        }),
-      ],
-    }),
-  );
-  configureGlobeTiles(next);
-  next.errorTarget = DEFAULT_TERRAIN_ERROR_TARGET;
-  return next;
-}
-
-const transformControls = new TransformControls(camera, renderer.domElement);
-const transformControlsHelper =
-  typeof transformControls.getHelper === 'function'
-    ? transformControls.getHelper()
-    : null;
-transformControls.setMode('translate');
-transformControls.setSpace('local');
-transformControls.size = 0.95;
-transformControls.addEventListener('dragging-changed', ({ value }) => {
-  cameraController.enabled = !value;
-});
-transformControls.addEventListener('objectChange', () => {
-  if (syncingTransformHandle) {
-    return;
-  }
-
-  if (activeTransformTarget === 'crop') {
-    const selectedBox = getSelectedCropBox();
-    if (selectedBox) {
-      normalizeCropBoxTransform(selectedBox);
-      syncCropBoxSdf(selectedBox);
-      updateCropBoxVisualState();
-    }
-    return;
-  }
-
-  transformHandle.updateMatrix();
-  transformHandle.updateMatrixWorld(true);
-  applyEditableGroupMatrixFromRootTransform(transformHandle.matrix);
-  syncCoordinateInputsFromTilesTransform();
-});
-transformControls.addEventListener('mouseDown', () => {
-  if (activeTransformTarget === 'crop' && getSelectedCropBox()) {
-    cropTransformSnapshot = createCropSnapshot();
-  }
-});
-transformControls.addEventListener('mouseUp', () => {
-  if (activeTransformTarget !== 'crop' || !cropTransformSnapshot) {
-    cropTransformSnapshot = null;
-    return;
-  }
-
-  if (!snapshotsEqual(cropTransformSnapshot, createCropSnapshot())) {
-    pushCropUndoSnapshot(cropTransformSnapshot);
-  }
-  cropTransformSnapshot = null;
-});
-if (transformControlsHelper) {
-  scene.add(transformControlsHelper);
-}
+      onRootObjectChange: (matrix) => {
+        applyEditableGroupMatrixFromRootTransform(matrix);
+        syncCoordinateInputsFromTilesTransform();
+      },
+      pushCropUndoSnapshot,
+      snapshotsEqual: (snapshot) =>
+        snapshotsEqual(snapshot, createCropSnapshot()),
+    },
+    getActiveTransformTarget: () => activeTransformTarget,
+    getCropTransformSnapshot: () => cropTransformSnapshot,
+    getSelectedCropBox,
+    getSyncingTransformHandle: () => syncingTransformHandle,
+    setCropTransformSnapshot: (snapshot) => {
+      cropTransformSnapshot = snapshot;
+    },
+  });
 
 const sphere = new Sphere();
-const worldRight = new Vector3(1, 0, 0);
-const centerNorth = new Vector3(0, 1, 0);
-const cartographicTarget = {
-  height: 0,
-  lat: 0,
-  lon: 0,
-};
-const moveToTilesBasis = new Matrix4();
-const moveToTilesPosition = new Vector3();
-const moveToTilesEast = new Vector3();
-const moveToTilesNorth = new Vector3();
-const moveToTilesUp = new Vector3();
-const moveToTilesForward = new Vector3();
-const moveToTilesRight = new Vector3();
-const moveToTilesBackward = new Vector3();
-const moveToTilesQuaternion = new Quaternion();
 const coordinateWorldPosition = new Vector3();
 const coordinateTransformMatrix = new Matrix4();
 const coordinateEditMatrix = new Matrix4();
@@ -442,26 +190,17 @@ const cropSetPositionLocalPosition = new Vector3();
 const pointerCoords = new Vector2();
 const pickRaycaster = new Raycaster();
 const pickTargets = [];
-const originalTileGeometricErrors = new WeakMap();
 let tiles = null;
 let toolbarVisible = true;
 let activeTransformMode = null;
-let geometricErrorScaleExponent = 0;
-let geometricErrorScale = 1;
-let lastSavedGeometricErrorScale = 1;
-let geometricErrorLayerScaleExponent = 0;
-let geometricErrorLayerScale = 1;
-let lastSavedGeometricErrorLayerScale = 1;
 let lastSavedMatrix = new Matrix4();
 const savedRootMatrix = new Matrix4();
 let savedRootMatrixPromise = Promise.resolve();
 let savedRootMatrixLoadError = null;
 let pendingSetPosition = false;
 let pendingCropSetPosition = false;
-let setPositionPointerStart = null;
 let syncingTransformHandle = false;
 let tilesTransformDirty = false;
-let lastRuntimeStatsUpdateTime = -Infinity;
 let showBoundingVolume = false;
 let debugTilesPlugin = null;
 let tilesetHasGaussianSplats = false;
@@ -472,241 +211,51 @@ let selectedCropBoxId = null;
 let nextCropBoxId = 1;
 let cropUndoStack = [];
 let cropTransformSnapshot = null;
+const runtimeStats = createRuntimeStats({
+  cacheBytesValueEl,
+  getScene: () => scene,
+  getTiles: () => tiles,
+  hasGaussianSplats: () => tilesetHasGaussianSplats,
+  splatsCountValueEl,
+  tilesDownloadingValueEl,
+  tilesLoadedValueEl,
+  tilesParsingValueEl,
+  tilesVisibleValueEl,
+});
 
 function getActiveEllipsoid() {
-  return tiles?.ellipsoid || globeTiles?.ellipsoid || null;
+  return tiles?.ellipsoid || globeController.getEllipsoid();
 }
 
-function updateTilesetErrorTarget() {
-  if (!tiles) {
-    return;
-  }
+const geoCamera = createGeoCameraController({
+  camera,
+  centerModeDistanceSq: CAMERA_CENTER_MODE_DISTANCE_SQ,
+  getActiveEllipsoid,
+});
 
-  tiles.errorTarget = DEFAULT_ERROR_TARGET / getEffectiveGeometricErrorScale();
-}
+const geometricError = createGeometricErrorController({
+  defaultErrorTarget: DEFAULT_ERROR_TARGET,
+  geometricErrorLayerScaleInput,
+  geometricErrorLayerValueEl,
+  geometricErrorScaleInput,
+  geometricErrorValueEl,
+  getTiles: () => tiles,
+});
 
-function updateGeometricErrorScaleDisplay() {
-  geometricErrorValueEl.textContent = `x${formatGeometricErrorScale(
-    geometricErrorScale,
-  )}`;
-}
-
-function updateGeometricErrorLayerScaleDisplay() {
-  geometricErrorLayerValueEl.textContent = `x${formatGeometricErrorScale(
-    geometricErrorLayerScale,
-  )}`;
-}
-
-function getEffectiveGeometricErrorScale() {
-  return lastSavedGeometricErrorScale * geometricErrorScale;
-}
-
-function getEffectiveGeometricErrorLayerScale() {
-  return lastSavedGeometricErrorLayerScale * geometricErrorLayerScale;
-}
-
-function getOriginalTileGeometricError(tile) {
-  if (!tile || typeof tile !== 'object') {
-    return null;
-  }
-
-  if (!originalTileGeometricErrors.has(tile)) {
-    const number = Number(tile.geometricError);
-    if (!Number.isFinite(number)) {
-      return null;
+const setPositionPointerTracker = createSetPositionPointerTracker({
+  getActiveTarget: getActiveSetPositionTarget,
+  maxClickDistanceSq: SET_POSITION_CLICK_MAX_DISTANCE_SQ,
+  onApply: async (target, event) => {
+    if (target === 'tiles') {
+      await applyTilesSetPositionFromPointerEvent(event);
+    } else if (target === 'crop') {
+      applyCropSetPositionFromPointerEvent(event);
     }
-    originalTileGeometricErrors.set(tile, number);
-  }
-
-  return originalTileGeometricErrors.get(tile);
-}
-
-function getKnownTileLeafGeometricError(tile, visited = new Set()) {
-  const originalGeometricError = getOriginalTileGeometricError(tile);
-  if (
-    originalGeometricError === null ||
-    !tile ||
-    typeof tile !== 'object' ||
-    visited.has(tile)
-  ) {
-    return originalGeometricError;
-  }
-
-  visited.add(tile);
-  let leafGeometricError = null;
-  const children = Array.isArray(tile.children) ? tile.children : [];
-  for (const child of children) {
-    const childLeafGeometricError = getKnownTileLeafGeometricError(
-      child,
-      visited,
-    );
-    if (childLeafGeometricError !== null) {
-      leafGeometricError =
-        leafGeometricError === null
-          ? childLeafGeometricError
-          : Math.min(leafGeometricError, childLeafGeometricError);
-    }
-  }
-  visited.delete(tile);
-  return leafGeometricError === null
-    ? originalGeometricError
-    : leafGeometricError;
-}
-
-function getGlobalTileLeafGeometricError(tile) {
-  const rootLeafGeometricError = tiles?.root
-    ? getKnownTileLeafGeometricError(tiles.root)
-    : null;
-  const tileLeafGeometricError = getKnownTileLeafGeometricError(tile);
-
-  if (rootLeafGeometricError === null) {
-    return tileLeafGeometricError;
-  }
-
-  if (tileLeafGeometricError === null) {
-    return rootLeafGeometricError;
-  }
-
-  return Math.min(rootLeafGeometricError, tileLeafGeometricError);
-}
-
-function applyGeometricErrorLayerScaleToTile(
-  tile,
-  leafGeometricError = getGlobalTileLeafGeometricError(tile),
-) {
-  const originalGeometricError = getOriginalTileGeometricError(tile);
-  if (originalGeometricError === null || leafGeometricError === null) {
-    return;
-  }
-
-  tile.geometricError =
-    leafGeometricError +
-    (originalGeometricError - leafGeometricError) *
-      getEffectiveGeometricErrorLayerScale();
-}
-
-function applyGeometricErrorLayerScaleToTileset() {
-  if (!tiles) {
-    return;
-  }
-
-  const leafGeometricError = getGlobalTileLeafGeometricError(tiles.root);
-  tiles.traverse(
-    (tile) => {
-      applyGeometricErrorLayerScaleToTile(tile, leafGeometricError);
-      return false;
-    },
-    null,
-    false,
-  );
-}
-
-function createGeometricErrorLayerScalePlugin() {
-  return {
-    name: 'GeometricErrorLayerScalePlugin',
-    preprocessNode(tile) {
-      applyGeometricErrorLayerScaleToTile(tile);
-    },
-  };
-}
-
-function getGaussianMeshSplatCount(mesh) {
-  if (!mesh || typeof mesh !== 'object') {
-    return 0;
-  }
-
-  const directCount =
-    mesh.extSplats?.getNumSplats?.() ??
-    mesh.extSplats?.numSplats ??
-    mesh.packedSplats?.getNumSplats?.() ??
-    mesh.packedSplats?.numSplats ??
-    mesh.splats?.getNumSplats?.();
-
-  return Number.isFinite(directCount) ? directCount : 0;
-}
-
-function getLoadedGaussianSplatCount() {
-  if (!tiles || typeof tiles.forEachLoadedModel !== 'function') {
-    return 0;
-  }
-
-  let total = 0;
-  tiles.forEachLoadedModel((loadedScene) => {
-    if (!loadedScene?.visible || !isGaussianSplatScene(loadedScene)) {
-      return;
-    }
-
-    const meshes = loadedScene.userData.gaussianSplatMeshes || [];
-    for (const mesh of meshes) {
-      total += getGaussianMeshSplatCount(mesh);
-    }
-  });
-
-  return total;
-}
-
-function getActiveSparkSplatsCount() {
-  let count = null;
-
-  scene.traverse((node) => {
-    if (count !== null || node?.visible === false) {
-      return;
-    }
-
-    const activeSplats = node?.activeSplats;
-    if (
-      Number.isFinite(activeSplats) &&
-      typeof node?.clearSplats === 'function' &&
-      typeof node?.render === 'function'
-    ) {
-      count = activeSplats;
-    }
-  });
-
-  return count;
-}
+  },
+});
 
 function updateRuntimeStats(force = false) {
-  if (
-    !cacheBytesValueEl ||
-    !splatsCountValueEl ||
-    !tilesDownloadingValueEl ||
-    !tilesParsingValueEl ||
-    !tilesLoadedValueEl ||
-    !tilesVisibleValueEl
-  ) {
-    return;
-  }
-
-  const now = performance.now();
-  if (
-    !force &&
-    now - lastRuntimeStatsUpdateTime < RUNTIME_STATS_UPDATE_INTERVAL_MS
-  ) {
-    return;
-  }
-
-  lastRuntimeStatsUpdateTime = now;
-
-  const cacheBytes = tiles?.lruCache?.cachedBytes ?? 0;
-  const tilesStats = tiles?.stats;
-  const downloadingTiles = tilesStats?.downloading ?? 0;
-  const parsingTiles = tilesStats?.parsing ?? 0;
-  const loadedTiles = tilesStats?.loaded ?? 0;
-  const visibleTiles = tiles?.visibleTiles?.size ?? tilesStats?.visible ?? 0;
-  const activeSparkSplats = tilesetHasGaussianSplats
-    ? getActiveSparkSplatsCount()
-    : null;
-  const splatCount = tilesetHasGaussianSplats
-    ? (activeSparkSplats ?? getLoadedGaussianSplatCount())
-    : 0;
-
-  cacheBytesValueEl.textContent = formatBytes(cacheBytes);
-  splatsCountValueEl.textContent = formatInteger(splatCount);
-  tilesDownloadingValueEl.textContent = formatInteger(downloadingTiles);
-  tilesParsingValueEl.textContent = formatInteger(parsingTiles);
-  tilesLoadedValueEl.textContent = formatInteger(loadedTiles);
-  tilesVisibleValueEl.textContent = formatInteger(visibleTiles);
+  runtimeStats.update(force);
 }
 
 function setGaussianSplatUiVisible(visible) {
@@ -736,36 +285,8 @@ function markTilesetHasGaussianSplats() {
   updateRuntimeStats(true);
 }
 
-function setGeometricErrorScaleExponent(exponent) {
-  geometricErrorScaleExponent = clamp(
-    Number(exponent),
-    GEOMETRIC_ERROR_SCALE_MIN_EXPONENT,
-    GEOMETRIC_ERROR_SCALE_MAX_EXPONENT,
-  );
-  geometricErrorScale = exponentToGeometricErrorScale(
-    geometricErrorScaleExponent,
-  );
-  geometricErrorScaleInput.value = geometricErrorScaleExponent.toFixed(1);
-  updateGeometricErrorScaleDisplay();
-  updateTilesetErrorTarget();
-}
-
-function setGeometricErrorLayerScaleExponent(exponent) {
-  geometricErrorLayerScaleExponent = clamp(
-    Number(exponent),
-    GEOMETRIC_ERROR_LAYER_SCALE_MIN_EXPONENT,
-    GEOMETRIC_ERROR_LAYER_SCALE_MAX_EXPONENT,
-  );
-  geometricErrorLayerScale = exponentToGeometricErrorScale(
-    geometricErrorLayerScaleExponent,
-  );
-  geometricErrorLayerScaleInput.value =
-    geometricErrorLayerScaleExponent.toFixed(1);
-  updateGeometricErrorLayerScaleDisplay();
-  applyGeometricErrorLayerScaleToTileset();
-}
-
 function syncTerrainButton() {
+  const terrainEnabled = globeController.isTerrainEnabled();
   terrainButton.classList.toggle('active', terrainEnabled);
   terrainLight.visible = terrainEnabled;
 }
@@ -816,17 +337,7 @@ function toggleBoundingVolume() {
 }
 
 function setTerrainEnabled(enabled) {
-  const next = enabled ? createTerrainGlobeTiles() : createImageryGlobeTiles();
-
-  if (globeTiles) {
-    globeGroup.remove(globeTiles.group);
-    globeTiles.dispose();
-  }
-
-  terrainEnabled = enabled;
-  globeTiles = next;
-  globeGroup.add(next.group);
-  cameraController.setEllipsoid(getActiveEllipsoid());
+  globeController.setTerrainEnabled(enabled);
   syncTerrainButton();
 }
 
@@ -887,76 +398,31 @@ function toggleTransformMode(mode) {
   setTransformMode(activeTransformMode === mode ? null : mode);
 }
 
-geometricErrorScaleInput.min = String(GEOMETRIC_ERROR_SCALE_MIN_EXPONENT);
-geometricErrorScaleInput.max = String(GEOMETRIC_ERROR_SCALE_MAX_EXPONENT);
-geometricErrorScaleInput.step = String(GEOMETRIC_ERROR_SCALE_STEP);
-geometricErrorLayerScaleInput.min = String(
-  GEOMETRIC_ERROR_LAYER_SCALE_MIN_EXPONENT,
-);
-geometricErrorLayerScaleInput.max = String(
-  GEOMETRIC_ERROR_LAYER_SCALE_MAX_EXPONENT,
-);
-geometricErrorLayerScaleInput.step = String(GEOMETRIC_ERROR_LAYER_SCALE_STEP);
-setGeometricErrorScaleExponent(geometricErrorScaleExponent);
-setGeometricErrorLayerScaleExponent(geometricErrorLayerScaleExponent);
-setTerrainEnabled(terrainEnabled);
+geometricError.initializeInputs();
+setTerrainEnabled(globeController.isTerrainEnabled());
 setTransformMode(activeTransformMode);
 updateCropButtons();
 syncToolbarVisibility();
 syncBoundingVolumeButton();
 
 function applySavedMatrix(matrix) {
-  composeMatrix(editableGroup, matrix);
+  applySavedObjectMatrix(editableGroup, matrix);
   invalidateTilesetTransforms();
   syncTransformHandleFromTilesTransform();
   syncCoordinateInputsFromTilesTransform();
 }
 
 function getCurrentMatrix() {
-  editableGroup.updateMatrix();
-  editableGroup.updateMatrixWorld(true);
-  return editableGroup.matrix.clone();
+  return getObjectMatrix(editableGroup);
 }
 
 function getCurrentRootTransform(target) {
-  editableGroup.updateMatrix();
-  editableGroup.updateMatrixWorld(true);
-  return target
-    .copy(editableGroup.matrix)
-    .multiply(savedRootInverseMatrix.copy(lastSavedMatrix).invert())
-    .multiply(savedRootMatrix);
-}
-
-function updateTilesRendererGroupMatrices(tilesRenderer) {
-  const group = tilesRenderer?.group;
-  if (!group) {
-    return;
-  }
-
-  group.updateMatrixWorld(true);
-
-  if (
-    group.matrixWorldInverse &&
-    typeof group.matrixWorldInverse.copy === 'function'
-  ) {
-    group.matrixWorldInverse.copy(group.matrixWorld).invert();
-  }
-}
-
-function refreshLoadedTileSceneMatrices(tilesRenderer) {
-  if (
-    !tilesRenderer ||
-    typeof tilesRenderer.forEachLoadedModel !== 'function'
-  ) {
-    return;
-  }
-
-  tilesRenderer.forEachLoadedModel((loadedScene) => {
-    if (typeof loadedScene.updateWorldMatrix === 'function') {
-      loadedScene.updateWorldMatrix(false, true);
-    } else {
-      loadedScene.updateMatrixWorld(true);
-    }
+  return getRootTransform({
+    editableGroup,
+    lastSavedMatrix,
+    savedRootInverseMatrix,
+    savedRootMatrix,
+    target,
   });
 }
 
@@ -969,18 +435,21 @@ function invalidateTilesetTransforms() {
 }
 
 function applyEditableGroupMatrixFromRootTransform(rootTransform) {
-  coordinateEditMatrix
-    .copy(rootTransform)
-    .multiply(savedRootInverseMatrix.copy(savedRootMatrix).invert())
-    .multiply(lastSavedMatrix);
-  composeMatrix(editableGroup, coordinateEditMatrix);
+  applyEditableMatrixFromRootTransform({
+    editableGroup,
+    lastSavedMatrix,
+    rootTransform,
+    savedRootInverseMatrix,
+    savedRootMatrix,
+    target: coordinateEditMatrix,
+  });
   invalidateTilesetTransforms();
 }
 
 function syncTransformHandleFromTilesTransform() {
   syncingTransformHandle = true;
   try {
-    composeMatrix(
+    applySavedObjectMatrix(
       transformHandle,
       getCurrentRootTransform(currentRootTransformMatrix),
     );
@@ -992,17 +461,9 @@ function syncTransformHandleFromTilesTransform() {
 }
 
 function resetEditableGroup() {
-  editableGroup.position.set(0, 0, 0);
-  editableGroup.quaternion.identity();
-  editableGroup.scale.set(1, 1, 1);
-  editableGroup.updateMatrix();
-  editableGroup.updateMatrixWorld(true);
+  resetEditableObjectTransform(editableGroup);
   lastSavedMatrix.identity();
-  transformHandle.position.set(0, 0, 0);
-  transformHandle.quaternion.identity();
-  transformHandle.scale.set(1, 1, 1);
-  transformHandle.updateMatrix();
-  transformHandle.updateMatrixWorld(true);
+  resetEditableObjectTransform(transformHandle);
   syncTransformControlsState();
   tilesTransformDirty = true;
 }
@@ -1018,106 +479,39 @@ function getTilesetWorldBoundingSphere() {
   return true;
 }
 
-function getCameraDistanceForBoundingSphere(radius) {
-  const verticalHalfFov = MathUtils.degToRad(camera.fov) * 0.5;
-  const horizontalHalfFov = Math.atan(
-    Math.tan(verticalHalfFov) * camera.aspect,
-  );
-  const limitingHalfFov = Math.max(
-    Math.min(verticalHalfFov, horizontalHalfFov),
-    1e-3,
-  );
-
-  return Math.max(radius / Math.sin(limitingHalfFov), 1);
-}
-
-function isCenterModePosition(position) {
-  return position.lengthSq() <= CAMERA_CENTER_MODE_DISTANCE_SQ;
-}
-
-function getLocalFrame(referencePoint) {
-  const ellipsoid = getActiveEllipsoid();
-  ellipsoid.getPositionToCartographic(referencePoint, cartographicTarget);
-  ellipsoid.getEastNorthUpFrame(
-    cartographicTarget.lat,
-    cartographicTarget.lon,
-    cartographicTarget.height,
-    moveToTilesBasis,
-  );
-  moveToTilesEast.setFromMatrixColumn(moveToTilesBasis, 0).normalize();
-  moveToTilesNorth.setFromMatrixColumn(moveToTilesBasis, 1).normalize();
-  moveToTilesUp.setFromMatrixColumn(moveToTilesBasis, 2).normalize();
-}
-
-function getCoordinateWorldPosition(latitude, longitude, height, target) {
-  const ellipsoid = getActiveEllipsoid();
-  return ellipsoid.getCartographicToPosition(
-    MathUtils.degToRad(latitude),
-    MathUtils.degToRad(longitude),
-    height,
-    target,
-  );
-}
-
-function getCoordinateTransform(latitude, longitude, height, target) {
-  const ellipsoid = getActiveEllipsoid();
-  return ellipsoid.getEastNorthUpFrame(
-    MathUtils.degToRad(latitude),
-    MathUtils.degToRad(longitude),
-    height,
-    target,
-  );
-}
-
-async function refreshSavedRootMatrix(url) {
-  const response = await fetch(url, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(
-      `Failed to load ${ROOT_TILESET_LABEL} metadata for coordinate placement (${response.status}).`,
-    );
-  }
-
-  const payload = await response.json();
-  savedRootMatrix.identity();
-
-  const rootTransform = payload?.root?.transform;
-  if (rootTransform != null) {
-    savedRootMatrix.fromArray(
-      getFiniteMatrix4Array(rootTransform, 'tileset.root.transform'),
-    );
-  }
-
-  return savedRootMatrix;
-}
-
 function syncCoordinateInputsFromTilesTransform() {
   if (savedRootMatrixLoadError) {
     return;
   }
 
-  const ellipsoid = getActiveEllipsoid();
   getCurrentRootTransform(currentRootTransformMatrix);
   coordinateWorldPosition.setFromMatrixPosition(currentRootTransformMatrix);
-  ellipsoid.getPositionToCartographic(
-    coordinateWorldPosition,
-    cartographicTarget,
-  );
+  const coordinate =
+    geoCamera.getCartographicFromWorldPosition(coordinateWorldPosition);
+  if (!coordinate) {
+    return;
+  }
 
-  latitudeInput.value = formatCoordinateInputValue(
-    MathUtils.radToDeg(cartographicTarget.lat),
-    8,
+  updateCoordinateInputs(
+    coordinate.latitude,
+    coordinate.longitude,
+    coordinate.height,
   );
-  longitudeInput.value = formatCoordinateInputValue(
-    MathUtils.radToDeg(cartographicTarget.lon),
-    8,
-  );
-  heightInput.value = formatCoordinateInputValue(cartographicTarget.height, 3);
 }
 
 function updateCoordinateInputs(latitude, longitude, height) {
-  latitudeInput.value = formatCoordinateInputValue(latitude, 8);
-  longitudeInput.value = formatCoordinateInputValue(longitude, 8);
-  heightInput.value = formatCoordinateInputValue(height, 3);
+  setCoordinateInputs(
+    {
+      heightInput,
+      latitudeInput,
+      longitudeInput,
+    },
+    {
+      height,
+      latitude,
+      longitude,
+    },
+  );
 }
 
 function raycastPickWorldPosition(target) {
@@ -1127,6 +521,7 @@ function raycastPickWorldPosition(target) {
     pickTargets.push(tiles.group);
   }
 
+  const globeTiles = globeController.getTiles();
   if (globeTiles?.group) {
     pickTargets.push(globeTiles.group);
   }
@@ -1266,14 +661,13 @@ function clearCropBoxes({ resetUndo = true } = {}) {
   syncTransformControlsState();
 }
 
-function updateCropList() {
-  cropListEl.replaceChildren();
-  cropBoxes.forEach((box, index) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = `Box ${index + 1}`;
-    button.classList.toggle('active', box.id === selectedCropBoxId);
-    button.addEventListener('click', () => {
+function updateCropButtons() {
+  updateCropBoxControls({
+    activeCropTransformMode,
+    activeTransformTarget,
+    cropBoxes,
+    elements: viewerElements,
+    onBoxButtonClick: (box, index) => {
       if (box.id === selectedCropBoxId) {
         clearCropSelection();
         setStatus(`Deselected crop box ${index + 1}.`);
@@ -1284,38 +678,12 @@ function updateCropList() {
         setCropTransformMode(DEFAULT_CROP_TRANSFORM_MODE);
       }
       setStatus(`Selected crop box ${index + 1}.`);
-    });
-    cropListEl.appendChild(button);
+    },
+    pendingCropSetPosition,
+    selectedCropBoxId,
+    tilesetHasGaussianSplats,
+    undoDepth: cropUndoStack.length,
   });
-}
-
-function updateCropButtons() {
-  const hasSelectedBox =
-    tilesetHasGaussianSplats && getSelectedCropBox() !== null;
-  const cropActive = activeTransformTarget === 'crop';
-  cropAddButton.disabled = !tilesetHasGaussianSplats;
-  cropCountValueEl.textContent = String(cropBoxes.length);
-  cropMoveButton.disabled = !hasSelectedBox;
-  cropRotateButton.disabled = !hasSelectedBox;
-  cropScaleButton.disabled = !hasSelectedBox;
-  cropSetPositionButton.disabled = !hasSelectedBox;
-  cropDeleteButton.disabled = !hasSelectedBox;
-  cropUndoButton.disabled =
-    !tilesetHasGaussianSplats || cropUndoStack.length === 0;
-  cropMoveButton.classList.toggle(
-    'active',
-    cropActive && activeCropTransformMode === 'translate',
-  );
-  cropRotateButton.classList.toggle(
-    'active',
-    cropActive && activeCropTransformMode === 'rotate',
-  );
-  cropScaleButton.classList.toggle(
-    'active',
-    cropActive && activeCropTransformMode === 'scale',
-  );
-  cropSetPositionButton.classList.toggle('active', pendingCropSetPosition);
-  updateCropList();
 }
 
 function setCropTransformMode(mode) {
@@ -1345,7 +713,7 @@ function clearCropSelection({ sync = true } = {}) {
   selectedCropBoxId = null;
   activeCropTransformMode = null;
   pendingCropSetPosition = false;
-  setPositionPointerStart = null;
+  setPositionPointerTracker.clear();
   if (activeTransformTarget === 'crop') {
     activeTransformTarget = null;
   }
@@ -1369,16 +737,7 @@ function selectCropBox(id) {
 }
 
 function getDefaultCropBoxQuaternion(position, target) {
-  if (
-    position.lengthSq() < CAMERA_CENTER_MODE_DISTANCE_SQ ||
-    !getActiveEllipsoid()
-  ) {
-    return target.identity();
-  }
-
-  getLocalFrame(position);
-  moveToTilesBasis.makeBasis(moveToTilesEast, moveToTilesNorth, moveToTilesUp);
-  return target.setFromRotationMatrix(moveToTilesBasis);
+  return geoCamera.getLocalFrameQuaternion(position, target);
 }
 
 function createDefaultCropBoxMatrix(target) {
@@ -1465,7 +824,6 @@ function getSplatCropBoxesPayload() {
 
 function syncPositionPickModeState() {
   setPositionButton.classList.toggle('active', pendingSetPosition);
-  cropSetPositionButton.classList.toggle('active', pendingCropSetPosition);
   cameraController.enabled = !transformControls.dragging;
   syncTransformControlsState();
   updateCropButtons();
@@ -1473,7 +831,7 @@ function syncPositionPickModeState() {
 
 function setSetPositionMode(active) {
   pendingSetPosition = active;
-  setPositionPointerStart = null;
+  setPositionPointerTracker.clear();
   if (active) {
     pendingCropSetPosition = false;
     setTransformMode(null);
@@ -1494,7 +852,7 @@ function cancelSetPositionMode() {
 function setCropSetPositionMode(active) {
   const hasSelectedBox = getSelectedCropBox() !== null;
   pendingCropSetPosition = active && hasSelectedBox;
-  setPositionPointerStart = null;
+  setPositionPointerTracker.clear();
   if (pendingCropSetPosition) {
     pendingSetPosition = false;
     setTransformMode(null);
@@ -1522,17 +880,20 @@ async function applyTilesPlacementFromCoordinate(latitude, longitude, height) {
     throw savedRootMatrixLoadError;
   }
 
-  getCoordinateTransform(
+  geoCamera.getCoordinateTransform(
     latitude,
     longitude,
     height,
     coordinateTransformMatrix,
   );
-  coordinateEditMatrix
-    .copy(coordinateTransformMatrix)
-    .multiply(savedRootInverseMatrix.copy(savedRootMatrix).invert())
-    .multiply(lastSavedMatrix);
-  composeMatrix(editableGroup, coordinateEditMatrix);
+  applyEditableMatrixFromRootTransform({
+    editableGroup,
+    lastSavedMatrix,
+    rootTransform: coordinateTransformMatrix,
+    savedRootInverseMatrix,
+    savedRootMatrix,
+    target: coordinateEditMatrix,
+  });
   invalidateTilesetTransforms();
   syncTransformHandleFromTilesTransform();
   syncCoordinateInputsFromTilesTransform();
@@ -1556,24 +917,11 @@ function pickWorldPositionFromPointerEvent(event, target) {
 }
 
 function pickCoordinateFromPointerEvent(event) {
-  const ellipsoid = getActiveEllipsoid();
-  if (!ellipsoid) {
-    return null;
-  }
-
   if (!pickWorldPositionFromPointerEvent(event, coordinateWorldPosition)) {
     return null;
   }
 
-  ellipsoid.getPositionToCartographic(
-    coordinateWorldPosition,
-    cartographicTarget,
-  );
-  return {
-    height: cartographicTarget.height,
-    latitude: MathUtils.radToDeg(cartographicTarget.lat),
-    longitude: MathUtils.radToDeg(cartographicTarget.lon),
-  };
+  return geoCamera.getCartographicFromWorldPosition(coordinateWorldPosition);
 }
 
 function setSelectedCropBoxPositionFromPointerEvent(event) {
@@ -1664,271 +1012,20 @@ function getActiveSetPositionTarget() {
   return null;
 }
 
-function shouldTrackSetPositionPointer(event) {
-  if (event.pointerType === 'mouse' && event.button !== 0) {
-    return false;
-  }
-  return event.isPrimary !== false;
-}
-
-function handleSetPositionPointerDown(event) {
-  const target = getActiveSetPositionTarget();
-  if (!target || !shouldTrackSetPositionPointer(event)) {
-    if (setPositionPointerStart && event.isPrimary === false) {
-      setPositionPointerStart.moved = true;
-    }
-    return;
-  }
-
-  setPositionPointerStart = {
-    clientX: event.clientX,
-    clientY: event.clientY,
-    moved: false,
-    pointerId: event.pointerId,
-    target,
-  };
-}
-
-function updateSetPositionPointerMovement(event) {
-  if (
-    !setPositionPointerStart ||
-    event.pointerId !== setPositionPointerStart.pointerId
-  ) {
-    return;
-  }
-
-  const deltaX = event.clientX - setPositionPointerStart.clientX;
-  const deltaY = event.clientY - setPositionPointerStart.clientY;
-  if (
-    deltaX * deltaX + deltaY * deltaY >
-    SET_POSITION_CLICK_MAX_DISTANCE_SQ
-  ) {
-    setPositionPointerStart.moved = true;
-  }
-}
-
-function handleSetPositionPointerMove(event) {
-  updateSetPositionPointerMovement(event);
-}
-
-function pointerMatchesSetPositionStart(event) {
-  if (!setPositionPointerStart) {
-    return false;
-  }
-  updateSetPositionPointerMovement(event);
-  if (event.pointerId !== setPositionPointerStart.pointerId) {
-    return false;
-  }
-  if (setPositionPointerStart.moved) {
-    return false;
-  }
-  if (getActiveSetPositionTarget() !== setPositionPointerStart.target) {
-    return false;
-  }
-
-  const deltaX = event.clientX - setPositionPointerStart.clientX;
-  const deltaY = event.clientY - setPositionPointerStart.clientY;
-  return (
-    deltaX * deltaX + deltaY * deltaY <= SET_POSITION_CLICK_MAX_DISTANCE_SQ
-  );
-}
-
-async function handleSetPositionPointerUp(event) {
-  if (!setPositionPointerStart) {
-    return;
-  }
-
-  const target = setPositionPointerStart.target;
-  const shouldApply = pointerMatchesSetPositionStart(event);
-  setPositionPointerStart = null;
-
-  if (!shouldApply) {
-    return;
-  }
-
-  if (target === 'tiles') {
-    await applyTilesSetPositionFromPointerEvent(event);
-  } else if (target === 'crop') {
-    applyCropSetPositionFromPointerEvent(event);
-  }
-}
-
-function handleSetPositionPointerCancel(event) {
-  if (
-    setPositionPointerStart &&
-    event.pointerId === setPositionPointerStart.pointerId
-  ) {
-    setPositionPointerStart = null;
-  }
-}
-
-function getCenterModeHeadingPitchRollForward(heading, pitch) {
-  const cosPitch = Math.cos(pitch);
-  const sinPitch = Math.sin(pitch);
-  const cosHeading = Math.cos(heading);
-  const sinHeading = Math.sin(heading);
-
-  moveToTilesForward.set(
-    sinHeading * cosPitch,
-    cosHeading * cosPitch,
-    sinPitch,
-  );
-
-  return moveToTilesForward.normalize();
-}
-
-function getHeadingPitchRollForward(referencePoint, heading, pitch) {
-  if (isCenterModePosition(referencePoint)) {
-    return getCenterModeHeadingPitchRollForward(heading, pitch);
-  }
-
-  if (referencePoint.lengthSq() < 1e-6) {
-    return moveToTilesForward.set(0, 0, -1);
-  }
-
-  getLocalFrame(referencePoint);
-
-  const cosPitch = Math.cos(pitch);
-  const sinPitch = Math.sin(pitch);
-  const cosHeading = Math.cos(heading);
-  const sinHeading = Math.sin(heading);
-
-  moveToTilesForward
-    .copy(moveToTilesNorth)
-    .multiplyScalar(cosHeading * cosPitch)
-    .addScaledVector(moveToTilesEast, sinHeading * cosPitch)
-    .addScaledVector(moveToTilesUp, sinPitch)
-    .normalize();
-
-  return moveToTilesForward;
-}
-
-function getCenterModeHeadingPitchRollBasis(heading, pitch, roll) {
-  getCenterModeHeadingPitchRollForward(heading, pitch);
-
-  moveToTilesRight
-    .copy(worldRight)
-    .multiplyScalar(Math.cos(heading))
-    .addScaledVector(centerNorth, -Math.sin(heading))
-    .normalize();
-  moveToTilesUp.crossVectors(moveToTilesRight, moveToTilesForward).normalize();
-
-  if (roll !== 0) {
-    moveToTilesRight.applyAxisAngle(moveToTilesForward, roll).normalize();
-    moveToTilesUp.applyAxisAngle(moveToTilesForward, roll).normalize();
-  }
-
-  moveToTilesBackward.copy(moveToTilesForward).negate();
-}
-
-function getHeadingPitchRollQuaternion(referencePoint, heading, pitch, roll) {
-  if (isCenterModePosition(referencePoint)) {
-    getCenterModeHeadingPitchRollBasis(heading, pitch, roll);
-  } else if (referencePoint.lengthSq() < 1e-6) {
-    moveToTilesQuaternion.identity();
-    return moveToTilesQuaternion;
-  } else {
-    getHeadingPitchRollForward(referencePoint, heading, pitch);
-    moveToTilesRight
-      .copy(moveToTilesEast)
-      .multiplyScalar(Math.cos(heading))
-      .addScaledVector(moveToTilesNorth, -Math.sin(heading))
-      .normalize();
-    moveToTilesUp
-      .crossVectors(moveToTilesRight, moveToTilesForward)
-      .normalize();
-
-    if (roll !== 0) {
-      moveToTilesRight.applyAxisAngle(moveToTilesForward, roll).normalize();
-      moveToTilesUp.applyAxisAngle(moveToTilesForward, roll).normalize();
-    }
-
-    moveToTilesBackward.copy(moveToTilesForward).negate();
-  }
-
-  moveToTilesBasis.makeBasis(
-    moveToTilesRight,
-    moveToTilesUp,
-    moveToTilesBackward,
-  );
-  return moveToTilesQuaternion.setFromRotationMatrix(moveToTilesBasis);
-}
-
-function getBoundingSphereFlyToPosition(target, range, options) {
-  const { heading, pitch } = options;
-  if (heading === undefined && pitch === undefined) {
-    const direction =
-      target.lengthSq() > 1e-6
-        ? moveToTilesPosition.copy(target).normalize()
-        : camera.position.lengthSq() > 1e-6
-          ? moveToTilesPosition.copy(camera.position).normalize()
-          : moveToTilesPosition.set(0, -1, 0);
-    return direction.multiplyScalar(range).add(target);
-  }
-
-  const resolvedHeading = heading ?? 0;
-  const resolvedPitch = pitch ?? -Math.PI / 2;
-  const centerForward = getCenterModeHeadingPitchRollForward(
-    resolvedHeading,
-    resolvedPitch,
-  );
-  const centerPosition = moveToTilesPosition
-    .copy(target)
-    .addScaledVector(centerForward, -range);
-  if (isCenterModePosition(centerPosition)) {
-    return centerPosition;
-  }
-
-  const forward = getHeadingPitchRollForward(
-    target,
-    resolvedHeading,
-    resolvedPitch,
-  );
-  return moveToTilesPosition.copy(target).addScaledVector(forward, -range);
-}
-
-function getFlyToPoseFromBoundingSphere(target, radius, options) {
-  const safeRadius = Math.max(radius, 1);
-  let offsetDistance = safeRadius;
-
-  if (camera instanceof PerspectiveCamera) {
-    const verticalFov = MathUtils.degToRad(camera.fov);
-    const horizontalFov =
-      2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
-    const minHalfFov = Math.max(0.1, Math.min(verticalFov, horizontalFov) / 2);
-    offsetDistance = safeRadius / Math.sin(minHalfFov) + safeRadius * 0.75;
-  } else {
-    offsetDistance = getCameraDistanceForBoundingSphere(safeRadius);
-  }
-
-  const position = getBoundingSphereFlyToPosition(
-    target,
-    offsetDistance,
-    options,
-  );
-  const quaternion = getHeadingPitchRollQuaternion(
-    isCenterModePosition(position) ? position : target,
-    options.heading ?? 0,
-    options.pitch ?? -Math.PI / 2,
-    options.roll ?? 0,
-  );
-
-  return {
-    position,
-    quaternion,
-  };
-}
-
 function frameTileset() {
   if (!getTilesetWorldBoundingSphere()) {
     return false;
   }
 
-  const pose = getFlyToPoseFromBoundingSphere(sphere.center, sphere.radius, {
-    heading: MOVE_TO_TILES_HEADING,
-    pitch: MOVE_TO_TILES_PITCH,
-    roll: MOVE_TO_TILES_ROLL,
-  });
+  const pose = geoCamera.getFlyToPoseFromBoundingSphere(
+    sphere.center,
+    sphere.radius,
+    {
+      heading: MOVE_TO_TILES_HEADING,
+      pitch: MOVE_TO_TILES_PITCH,
+      roll: MOVE_TO_TILES_ROLL,
+    },
+  );
   camera.position.copy(pose.position);
   camera.quaternion.copy(pose.quaternion);
   camera.updateMatrixWorld(true);
@@ -1991,13 +1088,13 @@ function moveCameraToCoordinate() {
     return;
   }
 
-  getCoordinateWorldPosition(
+  geoCamera.getCoordinateWorldPosition(
     coordinate.latitude,
     coordinate.longitude,
     coordinate.height,
     coordinateWorldPosition,
   );
-  const pose = getFlyToPoseFromBoundingSphere(
+  const pose = geoCamera.getFlyToPoseFromBoundingSphere(
     coordinateWorldPosition,
     MOVE_TO_COORDINATE_RADIUS,
     {
@@ -2050,13 +1147,14 @@ function loadTileset(url) {
   resetGaussianSplatTilesetState();
 
   resetEditableGroup();
-  lastSavedGeometricErrorScale = 1;
-  lastSavedGeometricErrorLayerScale = 1;
-  setGeometricErrorScaleExponent(0);
-  setGeometricErrorLayerScaleExponent(0);
+  geometricError.resetSavedScales();
   savedRootMatrix.identity();
   savedRootMatrixLoadError = null;
-  savedRootMatrixPromise = refreshSavedRootMatrix(url).then(
+  savedRootMatrixPromise = refreshSavedRootMatrix({
+    rootTilesetLabel: ROOT_TILESET_LABEL,
+    target: savedRootMatrix,
+    url,
+  }).then(
     () => {
       savedRootMatrixLoadError = null;
       syncTransformHandleFromTilesTransform();
@@ -2070,44 +1168,21 @@ function loadTileset(url) {
     },
   );
 
-  const next = new TilesRenderer(url);
-  next.downloadQueue.maxJobs = 8;
-  next.parseQueue.maxJobs = 4;
-  next.registerPlugin(new TilesFadePlugin());
-  next.registerPlugin(new TileCompressionPlugin());
-  next.registerPlugin(new UnloadTilesPlugin());
-  next.registerPlugin(new ImplicitTilingPlugin());
-  next.registerPlugin(createGeometricErrorLayerScalePlugin());
-  next.registerPlugin(
-    new GaussianSplatPlugin({
-      renderer,
-      scene,
-      sparkRendererOptions: {
-        accumExtSplats: true,
-      },
-    }),
-  );
-  debugTilesPlugin = new DebugTilesPlugin({
-    displayBoxBounds: showBoundingVolume,
-    displaySphereBounds: showBoundingVolume,
-    displayRegionBounds: showBoundingVolume,
-  });
-  next.registerPlugin(debugTilesPlugin);
-  next.registerPlugin(
-    new GLTFExtensionsPlugin({
-      metadata: true,
-      rtc: true,
+  const { debugTilesPlugin: nextDebugTilesPlugin, tiles: next } =
+    createInspectorTilesRenderer({
+      camera,
       dracoLoader,
       ktxLoader: ktx2Loader,
-      meshoptDecoder: MeshoptDecoder,
-      autoDispose: false,
-    }),
-  );
-  next.preprocessURL = normalizeLocalResourceUrl;
-  next.setCamera(camera);
-  next.setResolutionFromRenderer(camera, renderer);
+      preprocessURL: normalizeLocalResourceUrl,
+      renderer,
+      scene,
+      showBoundingVolume,
+      tilePreprocess: geometricError.applyLayerScaleToTile,
+      url,
+    });
+  debugTilesPlugin = nextDebugTilesPlugin;
   tiles = next;
-  updateTilesetErrorTarget();
+  geometricError.updateTilesetErrorTarget();
   applyBoundingVolumeVisibility();
   next.addEventListener('load-model', ({ scene: modelScene }) => {
     forceOpaqueScene(modelScene);
@@ -2140,7 +1215,7 @@ function loadTileset(url) {
     }
   };
 
-  next.addEventListener('load-tileset', applyGeometricErrorLayerScaleToTileset);
+  next.addEventListener('load-tileset', geometricError.applyLayerScaleToTileset);
   next.addEventListener('load-tile-set', tryFrame);
   next.addEventListener('load-tileset', tryFrame);
 }
@@ -2156,39 +1231,32 @@ async function saveTransform() {
   );
 
   const currentMatrix = getCurrentMatrix();
-  const incrementalMatrix = currentMatrix
-    .clone()
-    .multiply(lastSavedMatrix.clone().invert());
-  const incrementalGeometricErrorScale = geometricErrorScale;
-  const savedGeometricErrorScale = getEffectiveGeometricErrorScale();
-  const incrementalGeometricErrorLayerScale = geometricErrorLayerScale;
-  const savedGeometricErrorLayerScale = getEffectiveGeometricErrorLayerScale();
+  const incrementalMatrix = getIncrementalMatrix(
+    currentMatrix,
+    lastSavedMatrix,
+  );
+  const saveState = geometricError.getSaveState();
 
   try {
-    const response = await fetch(SAVE_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        geometricErrorLayerScale: incrementalGeometricErrorLayerScale,
-        geometricErrorScale: incrementalGeometricErrorScale,
-        splatCropBoxes,
-        transform: incrementalMatrix.toArray(),
-      }),
+    const payload = await postSaveTransform({
+      incrementalMatrix,
+      saveState,
+      saveUrl: SAVE_URL,
+      splatCropBoxes,
     });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(payload.error || 'Save failed.');
-    }
     if (payload && payload.transform != null) {
-      savedRootMatrix.fromArray(
-        getFiniteMatrix4Array(payload.transform, 'transform'),
-      );
+      setSavedRootMatrixFromTransform({
+        target: savedRootMatrix,
+        transform: payload.transform,
+      });
       savedRootMatrixLoadError = null;
       savedRootMatrixPromise = Promise.resolve(savedRootMatrix);
     } else {
-      savedRootMatrixPromise = refreshSavedRootMatrix(TILESET_URL).then(
+      savedRootMatrixPromise = refreshSavedRootMatrix({
+        rootTilesetLabel: ROOT_TILESET_LABEL,
+        target: savedRootMatrix,
+        url: TILESET_URL,
+      }).then(
         () => {
           savedRootMatrixLoadError = null;
         },
@@ -2202,11 +1270,9 @@ async function saveTransform() {
         throw savedRootMatrixLoadError;
       }
     }
-    lastSavedGeometricErrorScale = savedGeometricErrorScale;
-    lastSavedGeometricErrorLayerScale = savedGeometricErrorLayerScale;
+    geometricError.markSaved(saveState);
     lastSavedMatrix.copy(currentMatrix);
-    setGeometricErrorScaleExponent(0);
-    setGeometricErrorLayerScaleExponent(0);
+    geometricError.resetPendingScales();
     syncTransformHandleFromTilesTransform();
     syncCoordinateInputsFromTilesTransform();
     if (splatCropBoxes.length > 0) {
@@ -2221,10 +1287,10 @@ async function saveTransform() {
       );
     } else {
       setStatus(
-        `Saved transform, geometric-error scale x${formatGeometricErrorScale(
-          savedGeometricErrorScale,
-        )}, and layer multiplier x${formatGeometricErrorScale(
-          savedGeometricErrorLayerScale,
+        `Saved transform, geometric-error scale x${geometricError.formatScale(
+          saveState.savedGeometricErrorScale,
+        )}, and layer multiplier x${geometricError.formatScale(
+          saveState.savedGeometricErrorLayerScale,
         )} to ${ROOT_TILESET_LABEL} and build_summary.json.`,
       );
     }
@@ -2235,122 +1301,45 @@ async function saveTransform() {
   }
 }
 
-translateButton.addEventListener('click', () => {
-  cancelPositionPickModes();
-  toggleTransformMode('translate');
-  setStatus(
-    activeTransformMode === 'translate'
-      ? 'Translate mode enabled.'
-      : 'Translate mode disabled.',
-  );
-});
-rotateButton.addEventListener('click', () => {
-  cancelPositionPickModes();
-  toggleTransformMode('rotate');
-  setStatus(
-    activeTransformMode === 'rotate'
-      ? 'Rotate mode enabled.'
-      : 'Rotate mode disabled.',
-  );
-});
-cropAddButton.addEventListener('click', addCropBox);
-cropMoveButton.addEventListener('click', () => {
-  cancelPositionPickModes();
-  toggleCropTransformMode('translate');
-  setStatus(
-    activeTransformTarget === 'crop' && activeCropTransformMode === 'translate'
-      ? 'Crop box move mode enabled.'
-      : 'Crop box move mode disabled.',
-  );
-});
-cropRotateButton.addEventListener('click', () => {
-  cancelPositionPickModes();
-  toggleCropTransformMode('rotate');
-  setStatus(
-    activeTransformTarget === 'crop' && activeCropTransformMode === 'rotate'
-      ? 'Crop box rotate mode enabled.'
-      : 'Crop box rotate mode disabled.',
-  );
-});
-cropScaleButton.addEventListener('click', () => {
-  cancelPositionPickModes();
-  toggleCropTransformMode('scale');
-  setStatus(
-    activeTransformTarget === 'crop' && activeCropTransformMode === 'scale'
-      ? 'Crop box scale mode enabled.'
-      : 'Crop box scale mode disabled.',
-  );
-});
-cropSetPositionButton.addEventListener('click', toggleCropSetPositionMode);
-cropDeleteButton.addEventListener('click', deleteSelectedCropBox);
-cropUndoButton.addEventListener('click', undoCropBoxEdit);
-toolbarToggleButton.addEventListener('click', toggleToolbarVisibility);
-terrainButton.addEventListener('click', () => {
-  setTerrainEnabled(!terrainEnabled);
-  setStatus(
-    terrainEnabled
-      ? 'Terrain enabled with Cesium World Terrain.'
-      : 'Terrain disabled. Using ellipsoid imagery globe.',
-  );
-});
-boundingVolumeButton.addEventListener('click', toggleBoundingVolume);
-geometricErrorScaleInput.addEventListener('input', () => {
-  setGeometricErrorScaleExponent(geometricErrorScaleInput.value);
-});
-geometricErrorScaleInput.addEventListener('change', () => {
-  setStatus(
-    `Geometric-error scale set to x${formatGeometricErrorScale(
-      geometricErrorScale,
-    )}.`,
-  );
-});
-geometricErrorLayerScaleInput.addEventListener('input', () => {
-  setGeometricErrorLayerScaleExponent(geometricErrorLayerScaleInput.value);
-});
-geometricErrorLayerScaleInput.addEventListener('change', () => {
-  setStatus(
-    `Geometric-error layer multiplier set to x${formatGeometricErrorScale(
-      geometricErrorLayerScale,
-    )}.`,
-  );
-});
-moveToTilesButton.addEventListener('click', moveCameraToTiles);
-moveCameraToCoordinateButton.addEventListener('click', moveCameraToCoordinate);
-moveTilesToCoordinateButton.addEventListener('click', moveTilesToCoordinate);
-setPositionButton.addEventListener('click', toggleSetPositionMode);
-resetButton.addEventListener('click', resetToSaved);
-saveButton.addEventListener('click', saveTransform);
-renderer.domElement.addEventListener(
-  'pointerdown',
-  handleSetPositionPointerDown,
-);
-renderer.domElement.addEventListener(
-  'pointermove',
-  handleSetPositionPointerMove,
-);
-renderer.domElement.addEventListener(
-  'pointerup',
-  handleSetPositionPointerUp,
-);
-renderer.domElement.addEventListener(
-  'pointercancel',
-  handleSetPositionPointerCancel,
-);
-
-window.addEventListener('resize', () => {
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  tiles?.setResolutionFromRenderer(camera, renderer);
-  globeTiles?.setResolutionFromRenderer(camera, renderer);
-});
-
-window.addEventListener('pagehide', requestViewerShutdown);
-window.addEventListener('beforeunload', () => {
-  requestViewerShutdown();
-  cameraController.dispose();
-  dracoLoader.dispose();
-  ktx2Loader.dispose();
+bindViewerEvents({
+  camera,
+  cameraController,
+  dracoLoader,
+  elements: viewerElements,
+  geometricError,
+  getActiveCropTransformMode: () => activeCropTransformMode,
+  getActiveTransformMode: () => activeTransformMode,
+  getActiveTransformTarget: () => activeTransformTarget,
+  getGlobeTiles: () => globeController.getTiles(),
+  getTerrainEnabled: () => globeController.isTerrainEnabled(),
+  getTiles: () => tiles,
+  handlers: {
+    addCropBox,
+    cancelPositionPickModes,
+    deleteSelectedCropBox,
+    handleSetPositionPointerCancel:
+      setPositionPointerTracker.handlePointerCancel,
+    handleSetPositionPointerDown: setPositionPointerTracker.handlePointerDown,
+    handleSetPositionPointerMove: setPositionPointerTracker.handlePointerMove,
+    handleSetPositionPointerUp: setPositionPointerTracker.handlePointerUp,
+    moveCameraToCoordinate,
+    moveCameraToTiles,
+    moveTilesToCoordinate,
+    requestViewerShutdown,
+    resetToSaved,
+    saveTransform,
+    setTerrainEnabled,
+    toggleBoundingVolume,
+    toggleCropSetPositionMode,
+    toggleCropTransformMode,
+    toggleToolbarVisibility,
+    toggleTransformMode,
+    toggleSetPositionMode,
+    undoCropBoxEdit,
+  },
+  ktx2Loader,
+  renderer,
+  setStatus,
 });
 
 loadTileset(TILESET_URL);
@@ -2363,7 +1352,7 @@ function frame() {
     refreshLoadedTileSceneMatrices(tiles);
     tilesTransformDirty = false;
   }
-  globeTiles?.update();
+  globeController.update();
   tiles?.update();
   renderer.render(scene, camera);
   updateRuntimeStats();
