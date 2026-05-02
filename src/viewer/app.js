@@ -79,6 +79,12 @@ const MOVE_TO_COORDINATE_RADIUS = 10;
 const statusEl = document.getElementById('status');
 const cacheBytesValueEl = document.getElementById('cache-bytes-value');
 const splatsCountValueEl = document.getElementById('splats-count-value');
+const tilesDownloadingValueEl = document.getElementById(
+  'tiles-downloading-value',
+);
+const tilesParsingValueEl = document.getElementById('tiles-parsing-value');
+const tilesLoadedValueEl = document.getElementById('tiles-loaded-value');
+const tilesVisibleValueEl = document.getElementById('tiles-visible-value');
 const toolbarEl = document.getElementById('toolbar');
 const toolbarDockEl = toolbarEl.parentElement;
 const toolbarToggleButton = document.getElementById('toolbar-toggle');
@@ -692,7 +698,14 @@ function getActiveSparkSplatsCount() {
 }
 
 function updateRuntimeStats(force = false) {
-  if (!cacheBytesValueEl || !splatsCountValueEl) {
+  if (
+    !cacheBytesValueEl ||
+    !splatsCountValueEl ||
+    !tilesDownloadingValueEl ||
+    !tilesParsingValueEl ||
+    !tilesLoadedValueEl ||
+    !tilesVisibleValueEl
+  ) {
     return;
   }
 
@@ -707,6 +720,11 @@ function updateRuntimeStats(force = false) {
   lastRuntimeStatsUpdateTime = now;
 
   const cacheBytes = tiles?.lruCache?.cachedBytes ?? 0;
+  const tilesStats = tiles?.stats;
+  const downloadingTiles = tilesStats?.downloading ?? 0;
+  const parsingTiles = tilesStats?.parsing ?? 0;
+  const loadedTiles = tilesStats?.loaded ?? 0;
+  const visibleTiles = tiles?.visibleTiles?.size ?? tilesStats?.visible ?? 0;
   const activeSparkSplats = getActiveSparkSplatsCount();
   const splatCount =
     activeSparkSplats !== null
@@ -715,6 +733,10 @@ function updateRuntimeStats(force = false) {
 
   cacheBytesValueEl.textContent = formatBytes(cacheBytes);
   splatsCountValueEl.textContent = formatInteger(splatCount);
+  tilesDownloadingValueEl.textContent = formatInteger(downloadingTiles);
+  tilesParsingValueEl.textContent = formatInteger(parsingTiles);
+  tilesLoadedValueEl.textContent = formatInteger(loadedTiles);
+  tilesVisibleValueEl.textContent = formatInteger(visibleTiles);
 }
 
 function setGeometricErrorScaleExponent(exponent) {

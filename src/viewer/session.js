@@ -900,6 +900,24 @@ function buildViewerHtml(viewerConfig) {
         pointer-events: none;
       }
 
+      .tile-runtime-stats {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        display: flex;
+        flex-wrap: nowrap;
+        justify-content: flex-end;
+        gap: 14px;
+        box-sizing: border-box;
+        max-width: calc(100vw - 32px);
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.15);
+        backdrop-filter: blur(6px);
+        z-index: 12;
+        pointer-events: none;
+      }
+
       .runtime-stat {
         display: grid;
         gap: 4px;
@@ -912,6 +930,19 @@ function buildViewerHtml(viewerConfig) {
         backdrop-filter: blur(14px);
       }
 
+      .tile-runtime-stats .runtime-stat {
+        display: inline-flex;
+        align-items: center;
+        gap: 0;
+        min-width: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+        backdrop-filter: none;
+      }
+
       .runtime-stat-label {
         margin: 0;
         font-size: 10px;
@@ -921,12 +952,28 @@ function buildViewerHtml(viewerConfig) {
         color: #5d738b;
       }
 
+      .tile-runtime-stats .runtime-stat-label,
+      .tile-runtime-stats .runtime-stat-value {
+        display: inline-flex;
+        align-items: center;
+        font-size: 12px;
+        font-weight: 400;
+        letter-spacing: 0;
+        line-height: 14px;
+        text-transform: none;
+        color: #24292f;
+      }
+
       .runtime-stat-value {
         margin: 0;
         font-size: 15px;
         font-weight: 700;
         line-height: 1.1;
         color: #16324f;
+      }
+
+      .tile-runtime-stats .runtime-stat-value {
+        font-variant-numeric: tabular-nums;
       }
 
       canvas {
@@ -1216,12 +1263,27 @@ function buildViewerHtml(viewerConfig) {
           top: 16px;
           right: 16px;
           left: 16px;
+          flex-wrap: wrap;
+          justify-content: stretch;
+          max-width: none;
+        }
+
+        .tile-runtime-stats {
+          right: 16px;
+          bottom: 16px;
+          left: 16px;
+          flex-wrap: wrap;
           justify-content: stretch;
           max-width: none;
         }
 
         .runtime-stat {
           flex: 1 1 140px;
+          min-width: 0;
+        }
+
+        .tile-runtime-stats .runtime-stat {
+          flex: 0 0 auto;
           min-width: 0;
         }
 
@@ -1257,6 +1319,24 @@ function buildViewerHtml(viewerConfig) {
         <p id="splats-count-value" class="runtime-stat-value">0</p>
       </div>
     </div>
+    <div class="tile-runtime-stats" aria-live="polite">
+      <div class="runtime-stat">
+        <p class="runtime-stat-label">Downloading:&nbsp;</p>
+        <p id="tiles-downloading-value" class="runtime-stat-value">0</p>
+      </div>
+      <div class="runtime-stat">
+        <p class="runtime-stat-label">Parsing:&nbsp;</p>
+        <p id="tiles-parsing-value" class="runtime-stat-value">0</p>
+      </div>
+      <div class="runtime-stat">
+        <p class="runtime-stat-label">Loaded:&nbsp;</p>
+        <p id="tiles-loaded-value" class="runtime-stat-value">0</p>
+      </div>
+      <div class="runtime-stat">
+        <p class="runtime-stat-label">Visible:&nbsp;</p>
+        <p id="tiles-visible-value" class="runtime-stat-value">0</p>
+      </div>
+    </div>
     <div class="toolbar-dock expanded">
       <button
         id="toolbar-toggle"
@@ -1271,22 +1351,22 @@ function buildViewerHtml(viewerConfig) {
       <div id="toolbar" class="toolbar">
         <div class="toolbar-section">
           <div class="toolbar-section-header">
-            <p class="toolbar-section-title">Transform</p>
-          </div>
-          <div class="transform-actions">
-            <button id="translate" type="button">Translate</button>
-            <button id="rotate" type="button">Rotate</button>
-            <button id="set-position" class="full-span" type="button">Set Position</button>
-          </div>
-        </div>
-        <div class="toolbar-section">
-          <div class="toolbar-section-header">
             <p class="toolbar-section-title">Canvas</p>
           </div>
           <div class="coordinate-actions">
             <button id="terrain" class="wide" type="button">Terrain</button>
             <button id="bounding-volume" class="wide" type="button">Bounding Volume</button>
             <button id="move-to-tiles" type="button">Move To Tiles</button>
+          </div>
+        </div>
+        <div class="toolbar-section">
+          <div class="toolbar-section-header">
+            <p class="toolbar-section-title">Transform</p>
+          </div>
+          <div class="transform-actions">
+            <button id="translate" type="button">Translate</button>
+            <button id="rotate" type="button">Rotate</button>
+            <button id="set-position" class="full-span" type="button">Set Position</button>
           </div>
         </div>
         <div class="toolbar-section">
@@ -1299,8 +1379,8 @@ function buildViewerHtml(viewerConfig) {
             <label><span>Height</span><input id="height" type="number" step="any" value="0" /></label>
           </div>
           <div class="coordinate-actions">
-            <button id="move-tiles-to-coordinate" class="wide" type="button">Move Tiles</button>
             <button id="move-camera-to-coordinate" class="wide" type="button">Move Camera</button>
+            <button id="move-tiles-to-coordinate" class="wide" type="button">Move Tiles</button>
           </div>
         </div>
         <div class="toolbar-section">

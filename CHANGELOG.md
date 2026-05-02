@@ -6,6 +6,17 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-05-03
+
+### Added
+
+- Added a camera pivot indicator for rotate, pan, and zoom interactions.
+- Added bottom-right tile runtime stats for downloading, parsing, loaded, and visible tile counts.
+
+### Changed
+
+- Moved the `Canvas` toolbar section above `Transform`.
+
 ## [0.1.7] - 2026-04-27
 
 ### Changed
