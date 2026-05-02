@@ -1,9 +1,15 @@
 import {
   AmbientLight,
+  BoxGeometry,
   Color,
+  EdgesGeometry,
   MathUtils,
   Group,
+  LineBasicMaterial,
+  LineSegments,
   Matrix4,
+  Mesh,
+  MeshBasicMaterial,
   PerspectiveCamera,
   Quaternion,
   Raycaster,
@@ -13,6 +19,12 @@ import {
   Vector3,
   WebGLRenderer,
 } from 'three';
+import {
+  SplatEdit,
+  SplatEditRgbaBlendMode,
+  SplatEditSdf,
+  SplatEditSdfType,
+} from '@sparkjsdev/spark';
 import { TilesRenderer } from '3d-tiles-renderer';
 import {
   GLTFExtensionsPlugin,
@@ -75,6 +87,10 @@ const MOVE_TO_TILES_HEADING = 0;
 const MOVE_TO_TILES_PITCH = MathUtils.degToRad(-30);
 const MOVE_TO_TILES_ROLL = 0;
 const MOVE_TO_COORDINATE_RADIUS = 10;
+const CROP_BOX_MIN_HALF_SIZE = 0.01;
+const CROP_BOX_DEFAULT_HALF_SIZE = 10;
+const CROP_BOX_SELECTED_COLOR = 0xffcf33;
+const CROP_BOX_DEFAULT_COLOR = 0x19a0b5;
 
 const statusEl = document.getElementById('status');
 const cacheBytesValueEl = document.getElementById('cache-bytes-value');
@@ -90,6 +106,14 @@ const toolbarDockEl = toolbarEl.parentElement;
 const toolbarToggleButton = document.getElementById('toolbar-toggle');
 const translateButton = document.getElementById('translate');
 const rotateButton = document.getElementById('rotate');
+const cropAddButton = document.getElementById('crop-add');
+const cropMoveButton = document.getElementById('crop-move');
+const cropRotateButton = document.getElementById('crop-rotate');
+const cropScaleButton = document.getElementById('crop-scale');
+const cropDeleteButton = document.getElementById('crop-delete');
+const cropUndoButton = document.getElementById('crop-undo');
+const cropCountValueEl = document.getElementById('crop-count-value');
+const cropListEl = document.getElementById('crop-list');
 const moveToTilesButton = document.getElementById('move-to-tiles');
 const terrainButton = document.getElementById('terrain');
 const boundingVolumeButton = document.getElementById('bounding-volume');
@@ -250,8 +274,9 @@ function parseCoordinateInputs() {
 }
 
 function updateModeButtons(mode) {
-  translateButton.classList.toggle('active', mode === 'translate');
-  rotateButton.classList.toggle('active', mode === 'rotate');
+  const rootActive = activeTransformTarget === 'tiles';
+  translateButton.classList.toggle('active', rootActive && mode === 'translate');
+  rotateButton.classList.toggle('active', rootActive && mode === 'rotate');
 }
 
 function composeMatrix(target, matrix) {
@@ -364,6 +389,22 @@ const editableGroup = new Group();
 contentGroup.add(editableGroup);
 const transformHandle = new Group();
 scene.add(transformHandle);
+const cropGroup = new Group();
+cropGroup.name = 'Crop Boxes';
+scene.add(cropGroup);
+const cropSplatEdit = new SplatEdit({
+  name: 'Crop Box Preview Hide',
+  rgbaBlendMode: SplatEditRgbaBlendMode.MULTIPLY,
+  sdfSmooth: 0,
+  softEdge: 0,
+});
+cropSplatEdit.opacity = 1;
+// The 3DGS plugin renders splats through a camera-relative Spark renderer.
+// Mark this edit root so the plugin rebases the crop SDFs into the same frame.
+cropSplatEdit.userData.gaussianSplat = true;
+scene.add(cropSplatEdit);
+const cropBoxGeometry = new BoxGeometry(2, 2, 2);
+const cropBoxEdgesGeometry = new EdgesGeometry(cropBoxGeometry);
 
 const cameraController = new CameraController(renderer, contentGroup, camera);
 let globeTiles = null;
@@ -451,10 +492,36 @@ transformControls.addEventListener('objectChange', () => {
     return;
   }
 
+  if (activeTransformTarget === 'crop') {
+    const selectedBox = getSelectedCropBox();
+    if (selectedBox) {
+      normalizeCropBoxTransform(selectedBox);
+      syncCropBoxSdf(selectedBox);
+      updateCropBoxVisualState();
+    }
+    return;
+  }
+
   transformHandle.updateMatrix();
   transformHandle.updateMatrixWorld(true);
   applyEditableGroupMatrixFromRootTransform(transformHandle.matrix);
   syncCoordinateInputsFromTilesTransform();
+});
+transformControls.addEventListener('mouseDown', () => {
+  if (activeTransformTarget === 'crop' && getSelectedCropBox()) {
+    cropTransformSnapshot = createCropSnapshot();
+  }
+});
+transformControls.addEventListener('mouseUp', () => {
+  if (activeTransformTarget !== 'crop' || !cropTransformSnapshot) {
+    cropTransformSnapshot = null;
+    return;
+  }
+
+  if (!snapshotsEqual(cropTransformSnapshot, createCropSnapshot())) {
+    pushCropUndoSnapshot(cropTransformSnapshot);
+  }
+  cropTransformSnapshot = null;
 });
 if (transformControlsHelper) {
   scene.add(transformControlsHelper);
@@ -505,6 +572,14 @@ let tilesTransformDirty = false;
 let lastRuntimeStatsUpdateTime = -Infinity;
 let showBoundingVolume = false;
 let debugTilesPlugin = null;
+let activeTransformTarget = null;
+let activeCropTransformMode = null;
+let cropBoxes = [];
+let selectedCropBoxId = null;
+let nextCropBoxId = 1;
+let cropUndoStack = [];
+let cropTransformSnapshot = null;
+let cropEditDirtyToggle = false;
 
 function getActiveEllipsoid() {
   return tiles?.ellipsoid || globeTiles?.ellipsoid || null;
@@ -634,12 +709,14 @@ function applyGeometricErrorLayerScaleToTileset() {
   );
 }
 
-const geometricErrorLayerScalePlugin = {
-  name: 'GeometricErrorLayerScalePlugin',
-  preprocessNode(tile) {
-    applyGeometricErrorLayerScaleToTile(tile);
-  },
-};
+function createGeometricErrorLayerScalePlugin() {
+  return {
+    name: 'GeometricErrorLayerScalePlugin',
+    preprocessNode(tile) {
+      applyGeometricErrorLayerScaleToTile(tile);
+    },
+  };
+}
 
 function getGaussianMeshSplatCount(mesh) {
   if (!mesh || typeof mesh !== 'object') {
@@ -834,14 +911,34 @@ function setTerrainEnabled(enabled) {
 }
 
 function syncTransformControlsState() {
-  const controlsVisible = activeTransformMode !== null && !pendingSetPosition;
-  if (controlsVisible) {
+  const selectedBox = getSelectedCropBox();
+  const cropControlsVisible =
+    activeTransformTarget === 'crop' &&
+    activeCropTransformMode !== null &&
+    selectedBox !== null &&
+    !pendingSetPosition;
+  const rootControlsVisible =
+    activeTransformTarget === 'tiles' &&
+    activeTransformMode !== null &&
+    !pendingSetPosition;
+
+  if (cropControlsVisible) {
+    if (transformControls.object !== selectedBox.root) {
+      transformControls.attach(selectedBox.root);
+    }
+    transformControls.setMode(activeCropTransformMode);
+    transformControls.setSpace('local');
+  } else if (rootControlsVisible) {
     if (transformControls.object !== transformHandle) {
       transformControls.attach(transformHandle);
     }
+    transformControls.setMode(activeTransformMode);
+    transformControls.setSpace('local');
   } else if (transformControls.object) {
     transformControls.detach();
   }
+
+  const controlsVisible = cropControlsVisible || rootControlsVisible;
   transformControls.enabled = controlsVisible;
   if (transformControlsHelper) {
     transformControlsHelper.visible = controlsVisible;
@@ -852,9 +949,16 @@ function syncTransformControlsState() {
 function setTransformMode(mode) {
   activeTransformMode = mode;
   if (mode !== null) {
+    activeTransformTarget = 'tiles';
+    activeCropTransformMode = null;
+  } else if (activeTransformTarget === 'tiles') {
+    activeTransformTarget = null;
+  }
+  if (mode !== null) {
     transformControls.setMode(mode);
   }
   updateModeButtons(mode);
+  updateCropButtons();
   syncTransformControlsState();
 }
 
@@ -876,6 +980,7 @@ setGeometricErrorScaleExponent(geometricErrorScaleExponent);
 setGeometricErrorLayerScaleExponent(geometricErrorLayerScaleExponent);
 setTerrainEnabled(terrainEnabled);
 setTransformMode(activeTransformMode);
+updateCropButtons();
 syncToolbarVisibility();
 syncBoundingVolumeButton();
 
@@ -1122,9 +1227,359 @@ function raycastPickWorldPosition(target) {
   return true;
 }
 
+function getSelectedCropBox() {
+  return cropBoxes.find((box) => box.id === selectedCropBoxId) || null;
+}
+
+function invalidateCropSplatEdit() {
+  cropEditDirtyToggle = !cropEditDirtyToggle;
+  cropSplatEdit.opacity = cropEditDirtyToggle ? 1 : 1 - 1e-12;
+}
+
+function syncCropEditSdfs() {
+  cropSplatEdit.sdfs = null;
+  cropSplatEdit.clear();
+  cropBoxes.forEach((box) => {
+    cropSplatEdit.add(box.sdf);
+  });
+  invalidateCropSplatEdit();
+}
+
+function syncCropBoxSdf(box) {
+  box.root.updateMatrix();
+  box.root.updateMatrixWorld(true);
+  box.root.matrixWorld.decompose(
+    box.sdf.position,
+    box.sdf.quaternion,
+    box.sdf.scale,
+  );
+  box.sdf.updateMatrix();
+  box.sdf.updateMatrixWorld(true);
+  invalidateCropSplatEdit();
+}
+
+function normalizeCropBoxTransform(box) {
+  box.root.scale.set(
+    Math.max(Math.abs(box.root.scale.x), CROP_BOX_MIN_HALF_SIZE),
+    Math.max(Math.abs(box.root.scale.y), CROP_BOX_MIN_HALF_SIZE),
+    Math.max(Math.abs(box.root.scale.z), CROP_BOX_MIN_HALF_SIZE),
+  );
+  box.root.updateMatrix();
+  box.root.updateMatrixWorld(true);
+}
+
+function setCropBoxSelectedStyle(box, selected) {
+  const color = selected ? CROP_BOX_SELECTED_COLOR : CROP_BOX_DEFAULT_COLOR;
+  box.mesh.material.color.setHex(color);
+  box.mesh.material.opacity = selected ? 0.14 : 0.08;
+  box.edges.material.color.setHex(color);
+  box.edges.material.opacity = selected ? 1 : 0.72;
+}
+
+function updateCropBoxVisualState() {
+  cropBoxes.forEach((box) => {
+    setCropBoxSelectedStyle(box, box.id === selectedCropBoxId);
+  });
+}
+
+function createCropSnapshot() {
+  cropBoxes.forEach((box) => {
+    box.root.updateMatrix();
+  });
+  return {
+    activeCropTransformMode,
+    boxes: cropBoxes.map((box) => ({
+      id: box.id,
+      matrix: box.root.matrix.toArray(),
+    })),
+    nextCropBoxId,
+    selectedCropBoxId,
+  };
+}
+
+function cloneCropSnapshot(snapshot) {
+  return {
+    activeCropTransformMode: snapshot.activeCropTransformMode,
+    boxes: snapshot.boxes.map((box) => ({
+      id: box.id,
+      matrix: box.matrix.slice(),
+    })),
+    nextCropBoxId: snapshot.nextCropBoxId,
+    selectedCropBoxId: snapshot.selectedCropBoxId,
+  };
+}
+
+function snapshotsEqual(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function pushCropUndoSnapshot(snapshot = createCropSnapshot()) {
+  cropUndoStack.push(cloneCropSnapshot(snapshot));
+  if (cropUndoStack.length > 50) {
+    cropUndoStack.shift();
+  }
+  updateCropButtons();
+}
+
+function createCropBox({ id, matrix }) {
+  const root = new Group();
+  root.name = `Crop Box ${id}`;
+  root.userData.cropBoxId = id;
+
+  const mesh = new Mesh(
+    cropBoxGeometry,
+    new MeshBasicMaterial({
+      color: CROP_BOX_DEFAULT_COLOR,
+      depthWrite: false,
+      opacity: 0.08,
+      transparent: true,
+    }),
+  );
+  mesh.userData.cropBoxId = id;
+  const edges = new LineSegments(
+    cropBoxEdgesGeometry,
+    new LineBasicMaterial({
+      color: CROP_BOX_DEFAULT_COLOR,
+      opacity: 0.72,
+      transparent: true,
+    }),
+  );
+  edges.userData.cropBoxId = id;
+  root.add(mesh);
+  root.add(edges);
+
+  const sdf = new SplatEditSdf({
+    type: SplatEditSdfType.BOX,
+    color: new Color(0xffffff),
+    opacity: 0,
+    radius: 0,
+  });
+
+  const box = {
+    edges,
+    id,
+    mesh,
+    root,
+    sdf,
+  };
+
+  composeMatrix(root, new Matrix4().fromArray(matrix));
+  normalizeCropBoxTransform(box);
+  syncCropBoxSdf(box);
+  cropGroup.add(root);
+  cropBoxes.push(box);
+  syncCropEditSdfs();
+  return box;
+}
+
+function disposeCropBox(box) {
+  box.sdf.removeFromParent();
+  cropGroup.remove(box.root);
+  box.mesh.material.dispose();
+  box.edges.material.dispose();
+}
+
+function restoreCropSnapshot(snapshot) {
+  cropBoxes.forEach(disposeCropBox);
+  cropBoxes = [];
+  nextCropBoxId = snapshot.nextCropBoxId;
+  selectedCropBoxId = snapshot.selectedCropBoxId;
+  activeCropTransformMode = snapshot.activeCropTransformMode;
+
+  snapshot.boxes.forEach((box) => {
+    createCropBox(box);
+  });
+
+  if (!getSelectedCropBox()) {
+    selectedCropBoxId = null;
+    activeCropTransformMode = null;
+    if (activeTransformTarget === 'crop') {
+      activeTransformTarget = null;
+    }
+  } else if (activeCropTransformMode) {
+    activeTransformTarget = 'crop';
+    activeTransformMode = null;
+  } else if (activeTransformTarget === 'crop') {
+    activeTransformTarget = null;
+  }
+
+  syncCropEditSdfs();
+  updateModeButtons(activeTransformMode);
+  updateCropBoxVisualState();
+  updateCropButtons();
+  syncTransformControlsState();
+}
+
+function clearCropBoxes({ resetUndo = true } = {}) {
+  cropBoxes.forEach(disposeCropBox);
+  cropBoxes = [];
+  selectedCropBoxId = null;
+  activeCropTransformMode = null;
+  if (activeTransformTarget === 'crop') {
+    activeTransformTarget = null;
+  }
+  if (resetUndo) {
+    cropUndoStack = [];
+  }
+  cropTransformSnapshot = null;
+  syncCropEditSdfs();
+  updateCropButtons();
+  syncTransformControlsState();
+}
+
+function updateCropList() {
+  cropListEl.replaceChildren();
+  cropBoxes.forEach((box, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = `Box ${index + 1}`;
+    button.classList.toggle('active', box.id === selectedCropBoxId);
+    button.addEventListener('click', () => {
+      selectCropBox(box.id);
+      if (!activeCropTransformMode) {
+        setCropTransformMode('translate');
+      }
+      setStatus(`Selected crop box ${index + 1}.`);
+    });
+    cropListEl.appendChild(button);
+  });
+}
+
+function updateCropButtons() {
+  const hasSelectedBox = getSelectedCropBox() !== null;
+  const cropActive = activeTransformTarget === 'crop';
+  cropCountValueEl.textContent = String(cropBoxes.length);
+  cropMoveButton.disabled = !hasSelectedBox;
+  cropRotateButton.disabled = !hasSelectedBox;
+  cropScaleButton.disabled = !hasSelectedBox;
+  cropDeleteButton.disabled = !hasSelectedBox;
+  cropUndoButton.disabled = cropUndoStack.length === 0;
+  cropMoveButton.classList.toggle(
+    'active',
+    cropActive && activeCropTransformMode === 'translate',
+  );
+  cropRotateButton.classList.toggle(
+    'active',
+    cropActive && activeCropTransformMode === 'rotate',
+  );
+  cropScaleButton.classList.toggle(
+    'active',
+    cropActive && activeCropTransformMode === 'scale',
+  );
+  updateCropList();
+}
+
+function setCropTransformMode(mode) {
+  activeCropTransformMode = mode;
+  if (mode !== null) {
+    activeTransformTarget = 'crop';
+    activeTransformMode = null;
+    transformControls.setMode(mode);
+    transformControls.setSpace('local');
+  } else if (activeTransformTarget === 'crop') {
+    activeTransformTarget = null;
+  }
+  updateModeButtons(activeTransformMode);
+  updateCropButtons();
+  syncTransformControlsState();
+}
+
+function toggleCropTransformMode(mode) {
+  setCropTransformMode(
+    activeTransformTarget === 'crop' && activeCropTransformMode === mode
+      ? null
+      : mode,
+  );
+}
+
+function selectCropBox(id) {
+  selectedCropBoxId = cropBoxes.some((box) => box.id === id) ? id : null;
+  if (!selectedCropBoxId && activeTransformTarget === 'crop') {
+    activeCropTransformMode = null;
+    activeTransformTarget = null;
+  }
+  updateCropBoxVisualState();
+  updateCropButtons();
+  syncTransformControlsState();
+}
+
+function createDefaultCropBoxMatrix(target) {
+  const position = new Vector3();
+  let halfSize = CROP_BOX_DEFAULT_HALF_SIZE;
+
+  pointerCoords.set(0, 0);
+  setRaycasterFromCamera(pickRaycaster, pointerCoords, camera);
+  if (raycastPickWorldPosition(position)) {
+    if (getTilesetWorldBoundingSphere()) {
+      halfSize = clamp(sphere.radius * 0.05, 0.5, Math.max(0.5, sphere.radius));
+    }
+  } else if (getTilesetWorldBoundingSphere()) {
+    position.copy(sphere.center);
+    halfSize = clamp(sphere.radius * 0.1, 0.5, Math.max(0.5, sphere.radius));
+  } else {
+    camera.getWorldDirection(position);
+    position.multiplyScalar(100).add(camera.position);
+  }
+
+  return target.compose(
+    position,
+    new Quaternion(),
+    new Vector3(halfSize, halfSize, halfSize),
+  );
+}
+
+function addCropBox() {
+  cancelSetPositionMode();
+  pushCropUndoSnapshot();
+  const id = nextCropBoxId++;
+  createCropBox({
+    id,
+    matrix: createDefaultCropBoxMatrix(new Matrix4()).toArray(),
+  });
+  selectCropBox(id);
+  setCropTransformMode('translate');
+  setStatus('Added a crop box. Move, rotate, or scale it before saving.');
+}
+
+function deleteSelectedCropBox() {
+  const selectedBox = getSelectedCropBox();
+  if (!selectedBox) {
+    return;
+  }
+
+  pushCropUndoSnapshot();
+  cropBoxes = cropBoxes.filter((box) => box !== selectedBox);
+  disposeCropBox(selectedBox);
+  syncCropEditSdfs();
+  const nextSelection = cropBoxes[cropBoxes.length - 1] || null;
+  selectCropBox(nextSelection ? nextSelection.id : null);
+  setStatus('Deleted the selected crop box.');
+}
+
+function undoCropBoxEdit() {
+  const snapshot = cropUndoStack.pop();
+  if (!snapshot) {
+    return;
+  }
+  restoreCropSnapshot(snapshot);
+  setStatus('Undid the latest crop-box edit.');
+}
+
+function getSplatCropBoxesPayload() {
+  return cropBoxes.map((box) => {
+    box.root.updateMatrixWorld(true);
+    return {
+      matrix: box.root.matrixWorld.toArray(),
+    };
+  });
+}
+
 function setSetPositionMode(active) {
   pendingSetPosition = active;
   setPositionButton.classList.toggle('active', active);
+  if (active) {
+    setCropTransformMode(null);
+  }
   cameraController.enabled = !active;
   syncTransformControlsState();
 }
@@ -1490,6 +1945,7 @@ function loadTileset(url) {
     tiles = null;
     debugTilesPlugin = null;
   }
+  clearCropBoxes();
 
   updateRuntimeStats(true);
 
@@ -1521,7 +1977,7 @@ function loadTileset(url) {
   next.registerPlugin(new TileCompressionPlugin());
   next.registerPlugin(new UnloadTilesPlugin());
   next.registerPlugin(new ImplicitTilingPlugin());
-  next.registerPlugin(geometricErrorLayerScalePlugin);
+  next.registerPlugin(createGeometricErrorLayerScalePlugin());
   next.registerPlugin(
     new GaussianSplatPlugin({
       renderer,
@@ -1589,7 +2045,12 @@ function loadTileset(url) {
 async function saveTransform() {
   cancelSetPositionMode();
   saveButton.disabled = true;
-  setStatus('Saving transform...');
+  const splatCropBoxes = getSplatCropBoxesPayload();
+  setStatus(
+    splatCropBoxes.length > 0
+      ? 'Saving transform and deleting cropped splats...'
+      : 'Saving transform...',
+  );
 
   const currentMatrix = getCurrentMatrix();
   const incrementalMatrix = currentMatrix
@@ -1609,6 +2070,7 @@ async function saveTransform() {
       body: JSON.stringify({
         geometricErrorLayerScale: incrementalGeometricErrorLayerScale,
         geometricErrorScale: incrementalGeometricErrorScale,
+        splatCropBoxes,
         transform: incrementalMatrix.toArray(),
       }),
     });
@@ -1644,13 +2106,23 @@ async function saveTransform() {
     setGeometricErrorLayerScaleExponent(0);
     syncTransformHandleFromTilesTransform();
     syncCoordinateInputsFromTilesTransform();
-    setStatus(
-      `Saved transform, geometric-error scale x${formatGeometricErrorScale(
-        savedGeometricErrorScale,
-      )}, and layer multiplier x${formatGeometricErrorScale(
-        savedGeometricErrorLayerScale,
-      )} to ${ROOT_TILESET_LABEL} and build_summary.json.`,
-    );
+    if (splatCropBoxes.length > 0) {
+      const deletedSplats = Number(payload.deletedSplats || 0);
+      const processedSplatResources = Number(payload.processedSplatResources || 0);
+      clearCropBoxes();
+      loadTileset(TILESET_URL);
+      setStatus(
+        `Saved transform and deleted ${deletedSplats} cropped splats from ${processedSplatResources} splat resource${processedSplatResources === 1 ? '' : 's'}. Reloading tileset.`,
+      );
+    } else {
+      setStatus(
+        `Saved transform, geometric-error scale x${formatGeometricErrorScale(
+          savedGeometricErrorScale,
+        )}, and layer multiplier x${formatGeometricErrorScale(
+          savedGeometricErrorLayerScale,
+        )} to ${ROOT_TILESET_LABEL} and build_summary.json.`,
+      );
+    }
   } catch (err) {
     setStatus(err && err.message ? err.message : String(err), true);
   } finally {
@@ -1676,6 +2148,36 @@ rotateButton.addEventListener('click', () => {
       : 'Rotate mode disabled.',
   );
 });
+cropAddButton.addEventListener('click', addCropBox);
+cropMoveButton.addEventListener('click', () => {
+  cancelSetPositionMode();
+  toggleCropTransformMode('translate');
+  setStatus(
+    activeTransformTarget === 'crop' && activeCropTransformMode === 'translate'
+      ? 'Crop box move mode enabled.'
+      : 'Crop box move mode disabled.',
+  );
+});
+cropRotateButton.addEventListener('click', () => {
+  cancelSetPositionMode();
+  toggleCropTransformMode('rotate');
+  setStatus(
+    activeTransformTarget === 'crop' && activeCropTransformMode === 'rotate'
+      ? 'Crop box rotate mode enabled.'
+      : 'Crop box rotate mode disabled.',
+  );
+});
+cropScaleButton.addEventListener('click', () => {
+  cancelSetPositionMode();
+  toggleCropTransformMode('scale');
+  setStatus(
+    activeTransformTarget === 'crop' && activeCropTransformMode === 'scale'
+      ? 'Crop box scale mode enabled.'
+      : 'Crop box scale mode disabled.',
+  );
+});
+cropDeleteButton.addEventListener('click', deleteSelectedCropBox);
+cropUndoButton.addEventListener('click', undoCropBoxEdit);
 toolbarToggleButton.addEventListener('click', toggleToolbarVisibility);
 terrainButton.addEventListener('click', () => {
   setTerrainEnabled(!terrainEnabled);

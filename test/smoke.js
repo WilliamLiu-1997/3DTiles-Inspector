@@ -9,6 +9,10 @@ const api = require('../src');
 const IDENTITY_MATRIX4 = [
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 ];
+const GLB_MAGIC = 0x46546c67;
+const GLB_VERSION = 2;
+const GLB_JSON_CHUNK_TYPE = 0x4e4f534a;
+const GLB_BIN_CHUNK_TYPE = 0x004e4942;
 
 async function postSave(sessionUrl, body) {
   const origin = new URL(sessionUrl).origin;
@@ -24,6 +28,171 @@ async function postSave(sessionUrl, body) {
   assert.strictEqual(response.status, 200, payload.error);
   assert.strictEqual(payload.ok, true);
   return payload;
+}
+
+async function createSpzBytes(points) {
+  const { SpzWriter } = await import('@sparkjsdev/spark');
+  const writer = new SpzWriter({
+    numSplats: points.length,
+    shDegree: 0,
+  });
+
+  points.forEach(([x, y, z], index) => {
+    writer.setCenter(index, x, y, z);
+    writer.setAlpha(index, 1);
+    writer.setRgb(index, 1, 1, 1);
+    writer.setScale(index, 0, 0, 0);
+    writer.setQuat(index, 0, 0, 0, 1);
+  });
+
+  return Buffer.from(await writer.finalize());
+}
+
+async function readSpzCenters(bytes) {
+  const { SpzReader } = await import('@sparkjsdev/spark');
+  const reader = new SpzReader({ fileBytes: bytes });
+  await reader.parseHeader();
+  const centers = [];
+  await reader.parseSplats((index, x, y, z) => {
+    centers[index] = { x, y, z };
+  });
+  return centers;
+}
+
+function makeGaussianGltf(bufferUri, byteLength) {
+  return {
+    asset: { version: '2.0' },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0 }],
+    meshes: [
+      {
+        primitives: [
+          {
+            extensions: {
+              KHR_gaussian_splatting: {
+                extensions: {
+                  KHR_gaussian_splatting_compression_spz_2: {
+                    bufferView: 0,
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+    ],
+    buffers: [
+      bufferUri == null
+        ? { byteLength }
+        : {
+            byteLength,
+            uri: bufferUri,
+          },
+    ],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength }],
+    extensionsUsed: [
+      'KHR_gaussian_splatting',
+      'KHR_gaussian_splatting_compression_spz_2',
+    ],
+  };
+}
+
+function padBuffer(buffer, fill) {
+  const remainder = buffer.length % 4;
+  if (remainder === 0) {
+    return buffer;
+  }
+  return Buffer.concat([buffer, Buffer.alloc(4 - remainder, fill)]);
+}
+
+function buildGlb(json, bin) {
+  const jsonBytes = padBuffer(Buffer.from(JSON.stringify(json), 'utf8'), 0x20);
+  const binBytes = padBuffer(Buffer.from(bin), 0);
+  const totalLength = 12 + 8 + jsonBytes.length + 8 + binBytes.length;
+  const header = Buffer.alloc(12);
+  header.writeUInt32LE(GLB_MAGIC, 0);
+  header.writeUInt32LE(GLB_VERSION, 4);
+  header.writeUInt32LE(totalLength, 8);
+
+  const jsonHeader = Buffer.alloc(8);
+  jsonHeader.writeUInt32LE(jsonBytes.length, 0);
+  jsonHeader.writeUInt32LE(GLB_JSON_CHUNK_TYPE, 4);
+  const binHeader = Buffer.alloc(8);
+  binHeader.writeUInt32LE(binBytes.length, 0);
+  binHeader.writeUInt32LE(GLB_BIN_CHUNK_TYPE, 4);
+
+  return Buffer.concat([
+    header,
+    jsonHeader,
+    jsonBytes,
+    binHeader,
+    binBytes,
+  ]);
+}
+
+function parseGlb(filePath) {
+  const bytes = fs.readFileSync(filePath);
+  assert.strictEqual(bytes.readUInt32LE(0), GLB_MAGIC);
+  assert.strictEqual(bytes.readUInt32LE(4), GLB_VERSION);
+  let offset = 12;
+  let json = null;
+  let bin = null;
+  while (offset + 8 <= bytes.length) {
+    const chunkLength = bytes.readUInt32LE(offset);
+    const chunkType = bytes.readUInt32LE(offset + 4);
+    const start = offset + 8;
+    const end = start + chunkLength;
+    if (chunkType === GLB_JSON_CHUNK_TYPE) {
+      json = JSON.parse(bytes.subarray(start, end).toString('utf8').trimEnd());
+    } else if (chunkType === GLB_BIN_CHUNK_TYPE) {
+      bin = bytes.subarray(start, end);
+    }
+    offset = end;
+  }
+  return { json, bin };
+}
+
+function writeSplatTileset(tilesetPath, contentUri) {
+  fs.writeFileSync(
+    tilesetPath,
+    JSON.stringify({
+      asset: { version: '1.1' },
+      geometricError: 10,
+      root: {
+        geometricError: 10,
+        content: { uri: contentUri },
+      },
+    }),
+    'utf8',
+  );
+}
+
+async function assertCropSaveDeletesTwoSplats({ tilesetPath, readSpzBytes }) {
+  const session = await api.startInspectorSession(tilesetPath, {
+    handleSignals: false,
+    openBrowser: false,
+  });
+  try {
+    const payload = await postSave(session.url, {
+      geometricErrorLayerScale: 1,
+      geometricErrorScale: 2,
+      splatCropBoxes: [{ matrix: IDENTITY_MATRIX4 }],
+      transform: IDENTITY_MATRIX4,
+    });
+    assert.strictEqual(payload.deletedSplats, 2);
+    assert.strictEqual(payload.processedSplatResources, 1);
+  } finally {
+    await session.close();
+  }
+
+  const rewrittenTileset = JSON.parse(fs.readFileSync(tilesetPath, 'utf8'));
+  assert.strictEqual(rewrittenTileset.geometricError, 20);
+  assert.strictEqual(rewrittenTileset.root.geometricError, 20);
+
+  const centers = await readSpzCenters(readSpzBytes());
+  assert.strictEqual(centers.length, 1);
+  assert.ok(Math.abs(centers[0].x - 3) < 0.01);
 }
 
 async function main() {
@@ -141,6 +310,60 @@ async function main() {
     const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
     assert.strictEqual(summary.viewer_geometric_error_scale, 4);
     assert.strictEqual(summary.viewer_geometric_error_layer_scale, 8);
+
+    const cropPoints = [
+      [0, 0, 0],
+      [0.5, 0, 0],
+      [3, 0, 0],
+    ];
+
+    const gltfCropDir = path.join(tempDir, 'crop-gltf');
+    fs.mkdirSync(gltfCropDir);
+    const gltfSpzBytes = await createSpzBytes(cropPoints);
+    const gltfTilesetPath = path.join(gltfCropDir, 'tileset.json');
+    const gltfPath = path.join(gltfCropDir, 'splats.gltf');
+    const gltfBinPath = path.join(gltfCropDir, 'splats.bin');
+    fs.writeFileSync(gltfBinPath, gltfSpzBytes);
+    fs.writeFileSync(
+      gltfPath,
+      JSON.stringify(makeGaussianGltf('splats.bin', gltfSpzBytes.length)),
+      'utf8',
+    );
+    writeSplatTileset(gltfTilesetPath, 'splats.gltf');
+    await assertCropSaveDeletesTwoSplats({
+      tilesetPath: gltfTilesetPath,
+      readSpzBytes: () => {
+        const gltf = JSON.parse(fs.readFileSync(gltfPath, 'utf8'));
+        const view = gltf.bufferViews[0];
+        const buffer = fs.readFileSync(gltfBinPath);
+        return buffer.subarray(
+          Number(view.byteOffset || 0),
+          Number(view.byteOffset || 0) + Number(view.byteLength),
+        );
+      },
+    });
+
+    const glbCropDir = path.join(tempDir, 'crop-glb');
+    fs.mkdirSync(glbCropDir);
+    const glbSpzBytes = await createSpzBytes(cropPoints);
+    const glbTilesetPath = path.join(glbCropDir, 'tileset.json');
+    const glbPath = path.join(glbCropDir, 'splats.glb');
+    fs.writeFileSync(
+      glbPath,
+      buildGlb(makeGaussianGltf(null, glbSpzBytes.length), glbSpzBytes),
+    );
+    writeSplatTileset(glbTilesetPath, 'splats.glb');
+    await assertCropSaveDeletesTwoSplats({
+      tilesetPath: glbTilesetPath,
+      readSpzBytes: () => {
+        const { json, bin } = parseGlb(glbPath);
+        const view = json.bufferViews[0];
+        return bin.subarray(
+          Number(view.byteOffset || 0),
+          Number(view.byteOffset || 0) + Number(view.byteLength),
+        );
+      },
+    });
 
     console.log('ok');
   } finally {

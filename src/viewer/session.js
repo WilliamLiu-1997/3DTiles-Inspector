@@ -6,6 +6,10 @@ const { spawn } = require('child_process');
 
 const { InspectorError } = require('../errors');
 const { resolveAndValidateTilesetPath } = require('../tileset-path');
+const {
+  deleteSplatsInBoxes,
+  normalizeSplatCropBoxes,
+} = require('./splatCrop');
 
 const VIEWER_HTML_NAME = 'viewer.html';
 const VIEWER_DIR_NAME = 'viewer';
@@ -18,7 +22,7 @@ const BUILT_VIEWER_ASSETS_DIR = path.resolve(
 );
 const SAVE_ENDPOINT_PATH = '/__inspector/save-transform';
 const SHUTDOWN_ENDPOINT_PATH = '/__inspector/shutdown';
-const MAX_SAVE_BODY_BYTES = 64 * 1024;
+const MAX_SAVE_BODY_BYTES = 1024 * 1024;
 const SHUTDOWN_DELAY_MS = 1000;
 const IDENTITY_MATRIX4 = Object.freeze([
   1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
@@ -493,10 +497,14 @@ function updateTilesetJsonFile(
   return tileset;
 }
 
-function saveViewerTransform(
+async function saveViewerTransform(
   rootTilesetPath,
   editMatrix,
-  { geometricErrorLayerScale = 1, geometricErrorScale = 1 } = {},
+  {
+    geometricErrorLayerScale = 1,
+    geometricErrorScale = 1,
+    splatCropBoxes = [],
+  } = {},
 ) {
   const normalizedEdit = normalizeMatrix4Array(editMatrix, 'transform');
   const normalizedGeometricErrorScale = normalizePositiveFinite(
@@ -527,6 +535,11 @@ function saveViewerTransform(
     ? normalizeMatrix4Array(tileset.root.transform, 'tileset.root.transform')
     : cloneIdentityMatrix4();
   const nextRoot = multiplyMatrix4(normalizedEdit, currentRoot);
+  const cropResult = await deleteSplatsInBoxes(
+    tilesetPath,
+    nextRoot,
+    splatCropBoxes,
+  );
 
   updateTilesetJsonFile(tilesetPath, {
     geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
@@ -562,7 +575,11 @@ function saveViewerTransform(
     writeJsonAtomic(summaryPath, summary);
   }
 
-  return nextRoot;
+  return {
+    transform: nextRoot,
+    deletedSplats: cropResult.deletedSplats,
+    processedSplatResources: cropResult.processedSplatResources,
+  };
 }
 
 function resolveStaticFilePath(tilesDir, viewerAssetsDir, pathname) {
@@ -720,11 +737,25 @@ async function handleSaveTransformRequest(rootTilesetPath, req, res) {
     return;
   }
 
-  let nextRoot;
+  let normalizedSplatCropBoxes;
   try {
-    nextRoot = saveViewerTransform(rootTilesetPath, normalizedEdit, {
+    normalizedSplatCropBoxes = normalizeSplatCropBoxes(payload.splatCropBoxes);
+  } catch (err) {
+    sendJson(res, 400, {
+      error:
+        err instanceof Error && err.message
+          ? err.message
+          : 'splatCropBoxes must be an array of crop-box matrix objects.',
+    });
+    return;
+  }
+
+  let saveResult;
+  try {
+    saveResult = await saveViewerTransform(rootTilesetPath, normalizedEdit, {
       geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
       geometricErrorScale: normalizedGeometricErrorScale,
+      splatCropBoxes: normalizedSplatCropBoxes,
     });
   } catch (err) {
     sendJson(res, 500, {
@@ -738,9 +769,11 @@ async function handleSaveTransformRequest(rootTilesetPath, req, res) {
 
   sendJson(res, 200, {
     ok: true,
-    transform: nextRoot,
+    transform: saveResult.transform,
     geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
     geometricErrorScale: normalizedGeometricErrorScale,
+    deletedSplats: saveResult.deletedSplats,
+    processedSplatResources: saveResult.processedSplatResources,
   });
 }
 
@@ -1157,7 +1190,7 @@ function buildViewerHtml(viewerConfig) {
       .toolbar button:disabled {
         transform: none;
         opacity: 0.7;
-        cursor: wait;
+        cursor: not-allowed;
       }
 
       .range-field {
@@ -1230,6 +1263,25 @@ function buildViewerHtml(viewerConfig) {
       .toolbar button.wide {
         width: 100%;
         justify-content: center;
+      }
+
+      .crop-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        min-height: 0;
+      }
+
+      .crop-list:empty {
+        display: none;
+      }
+
+      .crop-list button {
+        flex: 1 1 72px;
+        min-width: 0;
+        padding-right: 10px;
+        padding-left: 10px;
+        font-size: 12px;
       }
 
       .status {
@@ -1367,6 +1419,25 @@ function buildViewerHtml(viewerConfig) {
             <button id="translate" type="button">Translate</button>
             <button id="rotate" type="button">Rotate</button>
             <button id="set-position" class="full-span" type="button">Set Position</button>
+          </div>
+        </div>
+        <div class="toolbar-section">
+          <div class="toolbar-section-header">
+            <p class="toolbar-section-title">Crop Boxes</p>
+            <p id="crop-count-value" class="toolbar-value">0</p>
+          </div>
+          <div class="coordinate-actions">
+            <button id="crop-add" class="wide" type="button">Add Box</button>
+          </div>
+          <div class="transform-actions">
+            <button id="crop-move" type="button">Move</button>
+            <button id="crop-rotate" type="button">Rotate</button>
+            <button id="crop-scale" type="button">Scale</button>
+          </div>
+          <div id="crop-list" class="crop-list"></div>
+          <div class="status-actions">
+            <button id="crop-delete" type="button">Delete</button>
+            <button id="crop-undo" type="button">Undo</button>
           </div>
         </div>
         <div class="toolbar-section">
