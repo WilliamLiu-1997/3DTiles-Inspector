@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-03
+
 ### Added
 
 - Added `Crop Regions` for 3D Gaussian Splat tilesets, with screen-space rectangle selection, pending/confirmed region controls, preview overlays, and adjustable far-plane depth handles.
@@ -18,6 +20,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 - Refactored the browser viewer into focused DOM, IO, scene, navigation, screen-selection, and transform modules.
 - Updated the public `./session` export to `src/server/session.js` and routed the CLI through the package entrypoint.
 - Updated `3d-tiles-rendererjs-3dgs-plugin` from `0.1.4` to `0.1.5`.
+
+### Fixed
+
+- Fixed repeated saves on Windows failing with `EPERM` when replacing recently streamed `.glb`, `.gltf`, `.bin`, or `.json` files, including races with active tile requests.
 
 ## [0.1.8] - 2026-05-03
 
