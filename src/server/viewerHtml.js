@@ -147,9 +147,78 @@ function buildViewerHtml(viewerConfig) {
       .screen-selection-rect {
         position: absolute;
         border: 1px solid #ffcf33;
-        background: rgba(255, 207, 51, 0.14);
+        background: rgba(255, 207, 51, 0.06);
         box-shadow:
           0 8px 24px rgba(120, 82, 0, 0.12);
+      }
+
+      .screen-selection-rect.editable {
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+      }
+
+      .screen-selection-edit-svg {
+        position: absolute;
+        inset: 0;
+        display: none;
+        overflow: visible;
+      }
+
+      .screen-selection-rect.editable .screen-selection-edit-svg {
+        display: block;
+      }
+
+      .screen-selection-edit-polygon {
+        fill: rgba(255, 207, 51, 0.06);
+        stroke: #ffcf33;
+        stroke-width: 2;
+        vector-effect: non-scaling-stroke;
+        filter: drop-shadow(0 8px 12px rgba(120, 82, 0, 0.12));
+      }
+
+      .screen-selection-rect.editable.drawing .screen-selection-edit-polygon {
+        fill: rgba(255, 207, 51, 0.2);
+      }
+
+      .screen-selection-edit-grid line {
+        stroke: rgba(255, 255, 255, 0.72);
+        stroke-width: 0.6;
+        vector-effect: non-scaling-stroke;
+      }
+
+      .screen-selection-edit-handle {
+        position: absolute;
+        display: none;
+        pointer-events: none;
+        transform: translate(-50%, -50%);
+      }
+
+      .screen-selection-rect.editable .screen-selection-edit-handle {
+        display: block;
+      }
+
+      .screen-selection-edit-top-left,
+      .screen-selection-edit-top-right,
+      .screen-selection-edit-bottom-right,
+      .screen-selection-edit-bottom-left {
+        width: 10px;
+        height: 10px;
+        border: 2px solid #ffffff;
+        border-radius: 50%;
+        background: #ffcf33;
+        box-shadow: 0 2px 8px rgba(120, 82, 0, 0.28);
+      }
+
+      .screen-selection-edit-top,
+      .screen-selection-edit-right,
+      .screen-selection-edit-bottom,
+      .screen-selection-edit-left {
+        width: 26px;
+        height: 4px;
+        border-radius: 999px;
+        background: #ffffff;
+        box-shadow: 0 1px 6px rgba(120, 82, 0, 0.24);
       }
 
       .toolbar-dock {
@@ -743,7 +812,7 @@ function buildViewerHtml(viewerConfig) {
               <p id="crop-count-value" class="toolbar-value">0</p>
             </div>
             <div class="coordinate-actions">
-              <button id="crop-screen-select" class="wide" type="button">Select Region</button>
+              <button id="crop-screen-select" class="wide" type="button">Draw Region</button>
             </div>
             <div id="crop-list" class="crop-list"></div>
             <div class="status-actions">

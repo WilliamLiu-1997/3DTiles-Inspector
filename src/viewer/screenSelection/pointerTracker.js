@@ -11,6 +11,8 @@ export function createScreenSelectionPointerTracker({
   camera,
   domElement,
   getDepthRange,
+  onOverlayClear,
+  onOverlayUpdate,
   onSelectionCreated,
   overlayEl,
   rectEl,
@@ -20,7 +22,18 @@ export function createScreenSelectionPointerTracker({
 
   function clearDrag() {
     drag = null;
+    onOverlayClear?.();
     clearOverlay(overlayEl, rectEl);
+  }
+
+  function updateDragOverlay() {
+    const clientRect = {
+      ...getClientSelectionRect(drag.start, drag.current),
+    };
+    if (onOverlayUpdate?.(clientRect) === true) {
+      return;
+    }
+    updateOverlayRect(overlayEl, rectEl, clientRect);
   }
 
   function setActive(nextActive) {
@@ -43,11 +56,7 @@ export function createScreenSelectionPointerTracker({
       start: dragStart.clone(),
       current: dragCurrent.clone(),
     };
-    updateOverlayRect(
-      overlayEl,
-      rectEl,
-      getClientSelectionRect(drag.start, drag.current),
-    );
+    updateDragOverlay();
     domElement.setPointerCapture?.(event.pointerId);
     event.preventDefault();
     event.stopPropagation();
@@ -61,11 +70,7 @@ export function createScreenSelectionPointerTracker({
 
     const domRect = domElement.getBoundingClientRect();
     getClampedClientPoint(event, domRect, drag.current);
-    updateOverlayRect(
-      overlayEl,
-      rectEl,
-      getClientSelectionRect(drag.start, drag.current),
-    );
+    updateDragOverlay();
     event.preventDefault();
     event.stopPropagation();
     return true;
@@ -76,6 +81,9 @@ export function createScreenSelectionPointerTracker({
       return false;
     }
 
+    const clientRect = {
+      ...getClientSelectionRect(drag.start, drag.current),
+    };
     const selection = createSelectionData({
       camera,
       domElement,
@@ -85,7 +93,7 @@ export function createScreenSelectionPointerTracker({
     });
     domElement.releasePointerCapture?.(event.pointerId);
     clearDrag();
-    onSelectionCreated(selection);
+    onSelectionCreated(selection, clientRect);
     event.preventDefault();
     event.stopPropagation();
     return true;

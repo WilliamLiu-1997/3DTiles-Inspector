@@ -8,11 +8,35 @@ import {
   disposeScreenSelection,
   getScreenSelectionFarDepthFromPosition,
   getScreenSelectionPayload,
+  setScreenSelectionShape,
   setScreenSelectionEditSelection,
   setScreenSelectionFarDepth,
   updateScreenSelectionWorldState,
 } from './index.js';
+import {
+  clearOverlay,
+  createSelectionData,
+} from './geometry.js';
+import {
+  SCREEN_EDIT_CORNER_HIT_SIZE,
+  SCREEN_EDIT_CORNER_PARTS,
+  SCREEN_EDIT_EDGE_HIT_SIZE,
+  SCREEN_EDIT_EDGE_PARTS,
+  SCREEN_EDIT_PART_POINT_INDICES,
+  clampClientPoints,
+  copyClientPoint,
+  copyClientPoints,
+  createScreenEditOverlay,
+  getClientRectPoints,
+  getPartPoint,
+  isConvexClientQuad,
+  pointSegmentDistanceSq,
+} from './editOverlay.js';
 import { updateCropControls } from '../dom/cropUi.js';
+
+const CAMERA_POSITION_EPSILON_SQ = 1e-12;
+const CAMERA_QUATERNION_EPSILON = 1e-10;
+const CAMERA_PROJECTION_EPSILON = 1e-10;
 
 export function createCropController({
   camera,
@@ -36,9 +60,13 @@ export function createCropController({
   let nextSelectionId = 1;
   let activeSelectionId = null;
   let pendingMode = false;
+  let pendingScreenEdit = null;
+  let pendingEditDrag = null;
+  let editCursor = '';
   let hasGaussianSplats = false;
   const sphere = new Sphere();
   const cameraForward = new Vector3();
+  const screenEditOverlay = createScreenEditOverlay({ overlayEl, rectEl });
 
   function getActiveSelection() {
     if (activeSelectionId == null) {
@@ -55,6 +83,136 @@ export function createCropController({
         selection,
       })),
     ];
+  }
+
+  function setEditCursor(cursor) {
+    const nextCursor = cursor || '';
+    if (editCursor === nextCursor) {
+      return;
+    }
+    domElement.style.cursor = nextCursor;
+    editCursor = nextCursor;
+  }
+
+  function clearEditCursor() {
+    setEditCursor('');
+  }
+
+  function getActivePendingEdit() {
+    if (!pendingScreenEdit || activeSelectionId !== pendingScreenEdit.selectionId) {
+      return null;
+    }
+    const match = pendingSelections.find(
+      (selection) => selection.id === pendingScreenEdit.selectionId,
+    );
+    return match ? pendingScreenEdit : null;
+  }
+
+  function clearScreenEditOverlay() {
+    screenEditOverlay.clear();
+    clearEditCursor();
+  }
+
+  function syncPendingEditOverlay() {
+    const edit = getActivePendingEdit();
+    if (!edit) {
+      clearScreenEditOverlay();
+      if (!pendingMode) {
+        clearOverlay(overlayEl, rectEl);
+      }
+      return;
+    }
+
+    screenEditOverlay.render(edit.clientPoints, { showGrid: false });
+  }
+
+  function createCameraPoseSnapshot() {
+    camera.updateMatrixWorld(true);
+    return {
+      position: camera.position.toArray(),
+      projectionMatrix: camera.projectionMatrix.toArray(),
+      quaternion: camera.quaternion.toArray(),
+    };
+  }
+
+  function projectionChanged(source, target) {
+    if (!Array.isArray(source) || !Array.isArray(target)) {
+      return true;
+    }
+    return source.some(
+      (value, index) =>
+        Math.abs(value - target[index]) > CAMERA_PROJECTION_EPSILON,
+    );
+  }
+
+  function cameraPoseChanged(cameraPose) {
+    if (!cameraPose) {
+      return true;
+    }
+
+    camera.updateMatrixWorld(true);
+    const dx = camera.position.x - cameraPose.position[0];
+    const dy = camera.position.y - cameraPose.position[1];
+    const dz = camera.position.z - cameraPose.position[2];
+    if (dx * dx + dy * dy + dz * dz > CAMERA_POSITION_EPSILON_SQ) {
+      return true;
+    }
+
+    const quaternion = cameraPose.quaternion;
+    const quaternionDot = Math.abs(
+      camera.quaternion.x * quaternion[0] +
+        camera.quaternion.y * quaternion[1] +
+        camera.quaternion.z * quaternion[2] +
+        camera.quaternion.w * quaternion[3],
+    );
+    if (1 - Math.min(1, quaternionDot) > CAMERA_QUATERNION_EPSILON) {
+      return true;
+    }
+
+    return projectionChanged(
+      camera.projectionMatrix.toArray(),
+      cameraPose.projectionMatrix,
+    );
+  }
+
+  function clearPendingScreenEdit() {
+    pendingScreenEdit = null;
+    pendingEditDrag = null;
+    syncPendingEditOverlay();
+  }
+
+  function freezePendingScreenEdit(showStatus = false) {
+    const hadEdit = !!pendingScreenEdit;
+    if (!hadEdit) {
+      return false;
+    }
+
+    clearPendingScreenEdit();
+    if (showStatus) {
+      setStatus(
+        'Screen selection shape fixed after camera movement. Drag the 3D far plane, then Confirm or Cancel.',
+      );
+    }
+    return true;
+  }
+
+  function freezePendingScreenEditIfCameraChanged() {
+    if (!pendingScreenEdit || pendingEditDrag) {
+      return false;
+    }
+    if (!cameraPoseChanged(pendingScreenEdit.cameraPose)) {
+      return false;
+    }
+    return freezePendingScreenEdit(true);
+  }
+
+  function createPendingScreenEdit(selection, clientRect) {
+    pendingScreenEdit = {
+      cameraPose: createCameraPoseSnapshot(),
+      clientPoints: clampClientPoints(getClientRectPoints(clientRect), domElement),
+      selectionId: selection.id,
+    };
+    syncPendingEditOverlay();
   }
 
   function syncWorldState() {
@@ -152,10 +310,200 @@ export function createCropController({
     camera,
     domElement,
     getDepthRange,
+    onOverlayClear: clearScreenEditOverlay,
+    onOverlayUpdate: (clientRect) => {
+      screenEditOverlay.render(getClientRectPoints(clientRect), {
+        showGrid: true,
+      });
+      return true;
+    },
     onSelectionCreated: handleSelectionCreated,
     overlayEl,
     rectEl,
   });
+
+  function createEditHit(part) {
+    return { cursor: 'grab', part };
+  }
+
+  function getPendingEditHit(event) {
+    if (freezePendingScreenEditIfCameraChanged()) {
+      return null;
+    }
+
+    const edit = getActivePendingEdit();
+    if (!edit) {
+      return null;
+    }
+
+    const pointer = { x: event.clientX, y: event.clientY };
+    for (const part of SCREEN_EDIT_CORNER_PARTS) {
+      const point = getPartPoint(edit.clientPoints, part);
+      const dx = pointer.x - point.x;
+      const dy = pointer.y - point.y;
+      if (dx * dx + dy * dy <= SCREEN_EDIT_CORNER_HIT_SIZE ** 2) {
+        return createEditHit(part);
+      }
+    }
+
+    for (const part of SCREEN_EDIT_EDGE_PARTS) {
+      const [startIndex, endIndex] = SCREEN_EDIT_PART_POINT_INDICES[part];
+      if (
+        pointSegmentDistanceSq(
+          pointer,
+          edit.clientPoints[startIndex],
+          edit.clientPoints[endIndex],
+        ) <=
+        SCREEN_EDIT_EDGE_HIT_SIZE ** 2
+      ) {
+        return createEditHit(part);
+      }
+    }
+
+    return null;
+  }
+
+  function getPendingEditDragPoints(event) {
+    const { part, startClientX, startClientY, startPoints } = pendingEditDrag;
+    const domRect = domElement.getBoundingClientRect();
+    const indices = SCREEN_EDIT_PART_POINT_INDICES[part] || [];
+    let dx = event.clientX - startClientX;
+    let dy = event.clientY - startClientY;
+
+    indices.forEach((index) => {
+      const point = startPoints[index];
+      dx = Math.max(dx, domRect.left - point.x);
+      dx = Math.min(dx, domRect.right - point.x);
+      dy = Math.max(dy, domRect.top - point.y);
+      dy = Math.min(dy, domRect.bottom - point.y);
+    });
+
+    return startPoints.map((point, index) =>
+      indices.includes(index)
+        ? {
+            x: point.x + dx,
+            y: point.y + dy,
+          }
+        : copyClientPoint(point),
+    );
+  }
+
+  function updatePendingEditSelection(clientPoints) {
+    const edit = getActivePendingEdit();
+    if (!edit) {
+      return false;
+    }
+
+    const match = findSelection(edit.selectionId);
+    if (!match) {
+      return false;
+    }
+
+    if (!isConvexClientQuad(clientPoints)) {
+      return false;
+    }
+
+    const selectionData = createSelectionData({
+      camera,
+      clientPoints,
+      domElement,
+      getDepthRange,
+    });
+    if (!selectionData) {
+      return false;
+    }
+
+    edit.clientPoints = copyClientPoints(clientPoints);
+    setScreenSelectionShape(
+      match.selection,
+      selectionData,
+      getCurrentRootTransformArray(),
+    );
+    syncPendingEditOverlay();
+    syncTransformControlsState();
+    return true;
+  }
+
+  function handlePendingEditPointerDown(event) {
+    if (event.button !== 0) {
+      return false;
+    }
+
+    const hit = getPendingEditHit(event);
+    if (!hit) {
+      return false;
+    }
+
+    pendingEditDrag = {
+      part: hit.part,
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startPoints: copyClientPoints(pendingScreenEdit.clientPoints),
+      updated: false,
+    };
+    domElement.setPointerCapture?.(event.pointerId);
+    setEditCursor('grabbing');
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
+
+  function handlePendingEditPointerMove(event) {
+    if (pendingEditDrag) {
+      if (event.pointerId !== pendingEditDrag.pointerId) {
+        return false;
+      }
+
+      pendingEditDrag.updated =
+        updatePendingEditSelection(getPendingEditDragPoints(event)) ||
+        pendingEditDrag.updated;
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
+    if (event.buttons) {
+      return false;
+    }
+
+    const hit = getPendingEditHit(event);
+    setEditCursor(hit?.cursor || '');
+    return false;
+  }
+
+  function handlePendingEditPointerUp(event) {
+    if (!pendingEditDrag || event.pointerId !== pendingEditDrag.pointerId) {
+      return false;
+    }
+
+    domElement.releasePointerCapture?.(event.pointerId);
+    const updated = pendingEditDrag.updated;
+    pendingEditDrag = null;
+    setEditCursor(getPendingEditHit(event)?.cursor || '');
+    setStatus(
+      updated
+        ? 'Updated screen selection convex quadrilateral.'
+        : 'Screen selection must stay convex.',
+      !updated,
+    );
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
+
+  function handlePendingEditPointerCancel(event) {
+    if (!pendingEditDrag || event.pointerId !== pendingEditDrag.pointerId) {
+      return false;
+    }
+
+    domElement.releasePointerCapture?.(event.pointerId);
+    pendingEditDrag = null;
+    clearEditCursor();
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  }
 
   function setMode(active) {
     pendingMode =
@@ -170,6 +518,7 @@ export function createCropController({
     }
     cameraController.enabled = !transformControls.dragging;
     syncTransformControlsState();
+    syncPendingEditOverlay();
     refreshUi();
   }
 
@@ -180,7 +529,7 @@ export function createCropController({
     setMode(false);
   }
 
-  function handleSelectionCreated(selectionData) {
+  function handleSelectionCreated(selectionData, clientRect) {
     if (pendingSelections.length > 0) {
       setMode(false);
       setStatus(
@@ -204,12 +553,13 @@ export function createCropController({
     pendingSelections.push(selection);
     activeSelectionId = selection.id;
     setMode(false);
+    createPendingScreenEdit(selection, clientRect);
     syncEditSdfs();
     syncFarHandles();
     syncTransformControlsState();
     refreshUi();
     setStatus(
-      'Added screen exclude selection. Drag the 3D far plane, then Confirm or Cancel before drawing another.',
+      'Added screen exclude selection. Drag corner points or edges into a convex quadrilateral before moving the camera, then adjust the 3D far plane and Confirm or Cancel.',
     );
   }
 
@@ -247,6 +597,7 @@ export function createCropController({
 
     const count = pendingSelections.length;
     selections.push(...pendingSelections);
+    clearPendingScreenEdit();
     pendingSelections = [];
     activeSelectionId = null;
     setMode(false);
@@ -270,6 +621,7 @@ export function createCropController({
     ) {
       activeSelectionId = null;
     }
+    clearPendingScreenEdit();
     pendingSelections.forEach(disposeScreenSelection);
     pendingSelections = [];
     syncEditSdfs();
@@ -346,11 +698,15 @@ export function createCropController({
     setTransformMode(null);
     syncEditSdfs();
     syncFarHandles();
+    syncPendingEditOverlay();
     refreshUi();
     syncTransformControlsState();
+    const canEditPendingRect = !wasActive && !!getActivePendingEdit();
     setStatus(
       wasActive
         ? 'Screen selection deactivated.'
+        : canEditPendingRect
+          ? 'Drag corner points or edges into a convex quadrilateral before moving the camera, or drag the 3D far plane to adjust depth.'
         : 'Drag the 3D far plane handle to adjust screen selection depth.',
     );
   }
@@ -378,6 +734,9 @@ export function createCropController({
     if (Number(selectionId) === activeSelectionId) {
       activeSelectionId = null;
     }
+    if (Number(selectionId) === pendingScreenEdit?.selectionId) {
+      clearPendingScreenEdit();
+    }
     syncEditSdfs();
     syncFarHandles();
     refreshUi();
@@ -397,6 +756,7 @@ export function createCropController({
     selections = [];
     pendingSelections = [];
     activeSelectionId = null;
+    clearPendingScreenEdit();
     syncEditSdfs();
     syncFarHandles();
     refreshUi();
@@ -412,6 +772,7 @@ export function createCropController({
     activeSelectionId = null;
     syncEditSdfs();
     syncFarHandles();
+    syncPendingEditOverlay();
     cancelMode();
     refreshUi();
   }
@@ -423,8 +784,53 @@ export function createCropController({
     activeSelectionId = null;
     syncEditSdfs();
     syncFarHandles();
+    syncPendingEditOverlay();
     refreshUi();
   }
+
+  function shouldCapturePointerDown(event) {
+    return (
+      event.button === 0 &&
+      (pendingMode || getPendingEditHit(event) !== null)
+    );
+  }
+
+  function handlePointerDown(event) {
+    if (pointerTracker.handlePointerDown(event)) {
+      return true;
+    }
+    return handlePendingEditPointerDown(event);
+  }
+
+  function handlePointerMove(event) {
+    if (pointerTracker.handlePointerMove(event)) {
+      return true;
+    }
+    return handlePendingEditPointerMove(event);
+  }
+
+  function handlePointerUp(event) {
+    if (pointerTracker.handlePointerUp(event)) {
+      return true;
+    }
+    return handlePendingEditPointerUp(event);
+  }
+
+  function handlePointerCancel(event) {
+    if (pointerTracker.handlePointerCancel(event)) {
+      return true;
+    }
+    return handlePendingEditPointerCancel(event);
+  }
+
+  cameraController.addEventListener(
+    'update',
+    freezePendingScreenEditIfCameraChanged,
+  );
+  cameraController.addEventListener(
+    'finish',
+    freezePendingScreenEditIfCameraChanged,
+  );
 
   return {
     cancel,
@@ -435,16 +841,17 @@ export function createCropController({
     getActiveSelection,
     getPayload,
     getPendingMode: () => pendingMode,
-    handlePointerCancel: pointerTracker.handlePointerCancel,
-    handlePointerDown: pointerTracker.handlePointerDown,
-    handlePointerMove: pointerTracker.handlePointerMove,
-    handlePointerUp: pointerTracker.handlePointerUp,
+    handlePointerCancel,
+    handlePointerDown,
+    handlePointerMove,
+    handlePointerUp,
     handleSelectionRemove,
     handleSelectionSelect,
     handleTransformControlObjectChange,
     hasPendingSelections: () => pendingSelections.length > 0,
     notifyTransformModeChanged,
     setHasGaussianSplats,
+    shouldCapturePointerDown,
     syncWorldState,
     toggle,
   };

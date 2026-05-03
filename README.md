@@ -101,11 +101,12 @@ const {
 
 The basic workflow is:
 
-1. Click `Select Region` and drag a rectangle over the splats to remove.
-2. Drag the far-plane handle to set how deep the crop region extends into the scene.
-3. Click `Confirm` to add the region to the save list, or `Cancel` to discard the pending rectangle.
-4. Select a confirmed region row if you need to adjust its 3D far plane with the transform handle.
-5. Click `Save` to persist the root transform and delete splats inside the confirmed crop regions.
+1. Click `Draw Region` and drag a rectangle over the splats to remove.
+2. Before moving the camera, drag pending corner points or side handles if the screen region needs adjustment; the pending shape must stay a convex four-sided screen quadrilateral.
+3. Rotate, pan, or zoom the camera to fix the pending screen shape in 3D, then drag the far-plane handle to set how deep the crop region extends into the scene.
+4. Click `Confirm` to add the region to the save list, or `Cancel` to discard the pending rectangle.
+5. Select a confirmed region row if you need to adjust its 3D far plane with the transform handle.
+6. Click `Save` to persist the root transform and delete splats inside the confirmed crop regions.
 
 <img src="https://raw.githubusercontent.com/WilliamLiu-1997/3DTiles-Inspector/main/region.png" alt="Crop Regions" />
 

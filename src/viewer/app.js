@@ -193,7 +193,7 @@ function setSaveUiLocked(locked) {
 }
 
 cameraController.setPointerDownFilter((event) => {
-  return !(cropController?.getPendingMode() && event.button === 0);
+  return !(cropController?.shouldCapturePointerDown(event) ?? false);
 });
 
 const { transformControls, transformControlsHelper } =

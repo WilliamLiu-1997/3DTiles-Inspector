@@ -1,5 +1,6 @@
 import {
   SCREEN_SELECTION_ACTION_EXCLUDE,
+  SCREEN_SELECTION_MIN_DEPTH_RANGE,
   cameraPosition,
   copyDepthRange,
   copyFarPlane,
@@ -85,6 +86,66 @@ export function getScreenSelectionPayload(selection) {
     rect: copyRect(selection.rect),
     viewProjectionMatrix: selection.viewProjectionMatrix.slice(),
   };
+}
+
+export function setScreenSelectionShape(
+  selection,
+  {
+    cameraPosition: sourceCameraPosition,
+    depthRange,
+    farPlane,
+    planeMatrices,
+    rect,
+    selectionForward: sourceSelectionForward,
+    viewProjectionMatrix,
+  },
+  currentTransformMatrix,
+) {
+  if (!selection) {
+    return;
+  }
+
+  const previousFarDepth = Number(selection.depthRange?.farDepth);
+  const copiedPlaneMatrices = planeMatrices.map((matrix) => matrix.slice());
+  const referenceTransformMatrix = copyMatrix4Array(currentTransformMatrix);
+
+  selection.basePlaneMatrices = copiedPlaneMatrices.map((matrix) =>
+    matrix.slice(),
+  );
+  selection.cameraPosition = copyVectorArray(sourceCameraPosition);
+  selection.currentTransformMatrix = referenceTransformMatrix.slice();
+  selection.depthRange = copyDepthRange(depthRange);
+  selection.farPlane = copyFarPlane(farPlane);
+  selection.planeMatrices = copiedPlaneMatrices;
+  selection.referenceTransformMatrix = referenceTransformMatrix;
+  selection.rect = copyRect(rect);
+  selection.selectionForward = copyVectorArray(sourceSelectionForward, [
+    0,
+    0,
+    -1,
+  ]);
+  selection.viewProjectionMatrix = viewProjectionMatrix.slice();
+
+  updateScreenSelectionWorldState(selection, currentTransformMatrix);
+
+  if (!Number.isFinite(previousFarDepth)) {
+    return;
+  }
+
+  const nextFarDepth = Math.min(
+    selection.depthRange.maxFarDepth,
+    Math.max(
+      selection.depthRange.nearDepth + SCREEN_SELECTION_MIN_DEPTH_RANGE,
+      previousFarDepth,
+    ),
+  );
+  if (Math.abs(nextFarDepth - selection.depthRange.farDepth) > 1e-9) {
+    setScreenSelectionFarDepth(
+      selection,
+      nextFarDepth,
+      currentTransformMatrix,
+    );
+  }
 }
 
 export function updateScreenSelectionWorldState(

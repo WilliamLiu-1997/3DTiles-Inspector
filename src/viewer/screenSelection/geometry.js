@@ -44,6 +44,16 @@ function clientPointToNdc(point, domRect) {
   };
 }
 
+function getClientSelectionQuad(start, end) {
+  const clientRect = getClientSelectionRect(start, end);
+  return [
+    new Vector2(clientRect.minX, clientRect.minY),
+    new Vector2(clientRect.maxX, clientRect.minY),
+    new Vector2(clientRect.maxX, clientRect.maxY),
+    new Vector2(clientRect.minX, clientRect.maxY),
+  ];
+}
+
 function getNdcSelectionRect(clientRect, domRect) {
   const topLeft = clientPointToNdc(
     new Vector2(clientRect.minX, clientRect.minY),
@@ -58,6 +68,21 @@ function getNdcSelectionRect(clientRect, domRect) {
     maxX: Math.max(topLeft.x, bottomRight.x),
     minY: Math.min(topLeft.y, bottomRight.y),
     maxY: Math.max(topLeft.y, bottomRight.y),
+  };
+}
+
+function getNdcSelectionQuad(clientPoints, domRect) {
+  return clientPoints.map((point) => clientPointToNdc(point, domRect));
+}
+
+function getNdcBounds(points) {
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  return {
+    maxX: Math.max(...xs),
+    maxY: Math.max(...ys),
+    minX: Math.min(...xs),
+    minY: Math.min(...ys),
   };
 }
 
@@ -277,10 +302,12 @@ function createFarPlaneData({
   };
 }
 
-function createFrustumData(camera, rect, depthRange) {
+function createFrustumDataFromQuad(camera, quad, depthRange) {
   const { farDepth, nearDepth } = normalizeDepthRange(camera, depthRange);
-  const centerX = (rect.minX + rect.maxX) * 0.5;
-  const centerY = (rect.minY + rect.maxY) * 0.5;
+  const centerX =
+    quad.reduce((total, point) => total + point.x, 0) / quad.length;
+  const centerY =
+    quad.reduce((total, point) => total + point.y, 0) / quad.length;
   const nearCenter = createPointAtViewDepth(
     camera,
     centerX,
@@ -312,56 +339,14 @@ function createFrustumData(camera, rect, depthRange) {
   plane.setFromNormalAndCoplanarPoint(selectionForward, farCenter);
 
   const farClipPlane = plane.clone();
-  const farTopLeft = createPointOnPlane(
-    camera,
-    rect.minX,
-    rect.maxY,
-    farClipPlane,
-  );
-  const farTopRight = createPointOnPlane(
-    camera,
-    rect.maxX,
-    rect.maxY,
-    farClipPlane,
-  );
-  const farBottomRight = createPointOnPlane(
-    camera,
-    rect.maxX,
-    rect.minY,
-    farClipPlane,
-  );
-  const farBottomLeft = createPointOnPlane(
-    camera,
-    rect.minX,
-    rect.minY,
-    farClipPlane,
+  const [farTopLeft, farTopRight, farBottomRight, farBottomLeft] = quad.map(
+    (point) => createPointOnPlane(camera, point.x, point.y, farClipPlane),
   );
 
   plane.setFromNormalAndCoplanarPoint(selectionForward, nearCenter);
   const nearPlane = plane.clone();
-  const nearTopLeft = createPointOnPlane(
-    camera,
-    rect.minX,
-    rect.maxY,
-    nearPlane,
-  );
-  const nearTopRight = createPointOnPlane(
-    camera,
-    rect.maxX,
-    rect.maxY,
-    nearPlane,
-  );
-  const nearBottomRight = createPointOnPlane(
-    camera,
-    rect.maxX,
-    rect.minY,
-    nearPlane,
-  );
-  const nearBottomLeft = createPointOnPlane(
-    camera,
-    rect.minX,
-    rect.minY,
-    nearPlane,
+  const [nearTopLeft, nearTopRight, nearBottomRight, nearBottomLeft] = quad.map(
+    (point) => createPointOnPlane(camera, point.x, point.y, nearPlane),
   );
   if (
     !farTopLeft ||
@@ -451,8 +436,22 @@ function createFrustumData(camera, rect, depthRange) {
   };
 }
 
+function createFrustumData(camera, rect, depthRange) {
+  return createFrustumDataFromQuad(
+    camera,
+    [
+      { x: rect.minX, y: rect.maxY },
+      { x: rect.maxX, y: rect.maxY },
+      { x: rect.maxX, y: rect.minY },
+      { x: rect.minX, y: rect.minY },
+    ],
+    depthRange,
+  );
+}
+
 export function createSelectionData({
   camera,
+  clientPoints,
   domElement,
   end,
   getDepthRange,
@@ -463,14 +462,27 @@ export function createSelectionData({
     return null;
   }
 
-  const clientRect = getClientSelectionRect(start, end);
+  const hasClientQuad =
+    Array.isArray(clientPoints) && clientPoints.length === 4;
+  const points = hasClientQuad
+    ? clientPoints
+    : getClientSelectionQuad(start, end);
+  const clientRect = {
+    maxX: Math.max(...points.map((point) => point.x)),
+    maxY: Math.max(...points.map((point) => point.y)),
+    minX: Math.min(...points.map((point) => point.x)),
+    minY: Math.min(...points.map((point) => point.y)),
+  };
   const width = clientRect.maxX - clientRect.minX;
   const height = clientRect.maxY - clientRect.minY;
   if (width * width + height * height < SCREEN_SELECTION_MIN_DRAG_DISTANCE_SQ) {
     return null;
   }
 
-  const rect = getNdcSelectionRect(clientRect, domRect);
+  const quad = getNdcSelectionQuad(points, domRect);
+  const rect = hasClientQuad
+    ? getNdcBounds(quad)
+    : getNdcSelectionRect(clientRect, domRect);
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld(true);
   cameraPosition.copy(camera.position);
@@ -478,7 +490,9 @@ export function createSelectionData({
   const viewProjectionMatrix = new Matrix4()
     .multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
     .toArray();
-  const frustum = createFrustumData(camera, rect, depthRange);
+  const frustum = hasClientQuad
+    ? createFrustumDataFromQuad(camera, quad, depthRange)
+    : createFrustumData(camera, rect, depthRange);
   if (!frustum) {
     return null;
   }
