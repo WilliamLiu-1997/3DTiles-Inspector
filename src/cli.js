@@ -1,5 +1,5 @@
 const { InspectorError } = require('./errors');
-const { runInspector } = require('./viewer-core');
+const { runInspector } = require('./');
 
 function usage() {
   return [

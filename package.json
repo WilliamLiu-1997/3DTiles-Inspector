@@ -9,7 +9,7 @@
   "exports": {
     ".": "./src/index.js",
     "./cli": "./src/cli.js",
-    "./session": "./src/viewer/session.js"
+    "./session": "./src/server/session.js"
   },
   "bin": {
     "3dtiles-inspector": "bin/3dtiles-inspector.js"

@@ -17,7 +17,7 @@ import {
 } from '3d-tiles-renderer/three/plugins';
 import { GaussianSplatPlugin } from '3d-tiles-rendererjs-3dgs-plugin';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
-import { forceOpaqueScene } from './viewerUtils.js';
+import { forceOpaqueScene } from '../utils.js';
 
 const SATELLITE_IMAGERY = {
   url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',

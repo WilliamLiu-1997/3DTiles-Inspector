@@ -5,7 +5,7 @@ import {
   mouseToCoords,
   normalizeLocalResourceUrl,
   setRaycasterFromCamera,
-} from './viewerUtils.js';
+} from './utils.js';
 import {
   applyEditableMatrixFromRootTransform,
   applySavedObjectMatrix,
@@ -17,22 +17,22 @@ import {
   resetEditableObjectTransform,
   setSavedRootMatrixFromTransform,
   updateTilesRendererGroupMatrices,
-} from './tilesetTransform.js';
-import { postSaveTransform } from './saveTransformRequest.js';
+} from './transform/tilesetTransform.js';
+import { postSaveTransform } from './io/saveTransformRequest.js';
 import {
   parseCoordinateInputs as parseCoordinateInputValues,
   setCoordinateInputs,
-} from './coordinateInputs.js';
-import { createRuntimeStats } from './runtimeStats.js';
-import { createGeoCameraController } from './geoCamera.js';
-import { createGeometricErrorController } from './geometricError.js';
-import { createGlobeController } from './globeController.js';
-import { updateCropControls } from './cropUi.js';
-import { createViewerScene } from './sceneSetup.js';
-import { createViewerTransformControls } from './transformControls.js';
-import { bindViewerEvents } from './viewerEvents.js';
-import { createViewerShutdownRequester } from './viewerShutdown.js';
-import { createSetPositionPointerTracker } from './setPositionPointerTracker.js';
+} from './dom/coordinateInputs.js';
+import { createRuntimeStats } from './dom/runtimeStats.js';
+import { createGeoCameraController } from './transform/geoCamera.js';
+import { createGeometricErrorController } from './transform/geometricError.js';
+import { createGlobeController } from './scene/globeController.js';
+import { updateCropControls } from './dom/cropUi.js';
+import { createViewerScene } from './scene/sceneSetup.js';
+import { createViewerTransformControls } from './scene/transformControls.js';
+import { bindViewerEvents } from './dom/events.js';
+import { createViewerShutdownRequester } from './io/shutdown.js';
+import { createSetPositionPointerTracker } from './io/setPositionPointerTracker.js';
 import {
   createScreenSelection,
   createScreenSelectionEdit,
@@ -45,11 +45,11 @@ import {
   setScreenSelectionFarDepth,
   setScreenSelectionEditSelection,
   updateScreenSelectionWorldState,
-} from './screenSelection.js';
+} from './screenSelection/index.js';
 import {
   DEFAULT_ERROR_TARGET,
   createInspectorTilesRenderer,
-} from './tiles.js';
+} from './scene/tiles.js';
 import {
   BASIS_TRANSCODER_PATH,
   CAMERA_CENTER_MODE_DISTANCE_SQ,
@@ -63,8 +63,8 @@ import {
   SET_POSITION_CLICK_MAX_DISTANCE_SQ,
   SHUTDOWN_URL,
   TILESET_URL,
-} from './viewerConfig.js';
-import { getViewerElements } from './domElements.js';
+} from './config.js';
+import { getViewerElements } from './dom/elements.js';
 
 const viewerElements = getViewerElements();
 const {

@@ -2,7 +2,7 @@ import {
   createImageryGlobeTiles,
   createTerrainGlobeTiles,
 } from './tiles.js';
-import { normalizeLocalResourceUrl } from './viewerUtils.js';
+import { normalizeLocalResourceUrl } from '../utils.js';
 
 export function createGlobeController({
   camera,

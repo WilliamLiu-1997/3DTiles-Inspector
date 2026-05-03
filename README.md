@@ -92,7 +92,21 @@ const {
 - `Terrain` to toggle Cesium World Terrain while keeping satellite imagery
 - `Geometric Error` scaling from `1/16x` to `16x`
 - `Layer Multiplier` scaling from `1/8x` to `8x` for each tile's geometric-error difference from the tileset's global leaf baseline
+- `Crop Regions` for drawing screen-space exclude regions on 3D Gaussian Splat tilesets
 - `Save` to persist the updated root transform and geometric-error scale back to disk
+
+### Crop Regions
+
+`Crop Regions` appears when the loaded tileset contains 3D Gaussian Splat content. It lets you draw one or more screen-space exclude rectangles, preview them in the viewer, then apply the crop when you click `Save`.
+
+The basic workflow is:
+
+1. Click `Screen Select` and drag a rectangle over the splats to remove.
+2. Click `Confirm` to add the region to the save list, or `Cancel` to discard the pending rectangle.
+3. Select a confirmed region row if you need to adjust its 3D far plane with the transform handle.
+4. Click `Save` to persist the root transform and delete splats inside the confirmed crop regions.
+
+Crop saving rewrites supported local `.gltf` / `.glb` Gaussian Splat resources that use `KHR_gaussian_splatting_compression_spz_2`. Fully deleted splat primitives are removed from their glTF, and empty tile content can be pruned from the tileset JSON. Remote content and unsupported Gaussian Splat encodings are rejected instead of being modified.
 
 If `build_summary.json` exists next to the root tileset, `Save` also updates:
 
@@ -106,10 +120,13 @@ If `build_summary.json` exists next to the root tileset, `Save` also updates:
 
 - `src/index.js` exports the public Node API
 - `src/cli.js` implements the standalone CLI
-- `src/viewer/session.js` manages the local server, temporary assets, browser launch, and save handling
+- `src/server/session.js` manages the local server, temporary assets, browser launch, and shutdown lifecycle
+- `src/server/saveTransform.js` and `src/server/splatCrop/` handle transform saves, geometric-error updates, and Gaussian Splat crop writes
+- `src/server/viewerAssets.js` and `src/server/viewerHtml.js` create the temporary viewer HTML and static asset directory
 - `src/viewer/app.js` contains the browser runtime source
+- `src/viewer/screenSelection/` contains the browser-side crop region selection and preview UI
 - `dist/inspector-assets/viewer/` contains the generated browser bundle and local decoder assets built by `npm run build:viewer`
-- `src/viewer/cameraController.js` contains the vendored camera controller used by the runtime
+- `src/viewer/scene/cameraController.js` contains the vendored camera controller used by the runtime
 
 ## Development
 

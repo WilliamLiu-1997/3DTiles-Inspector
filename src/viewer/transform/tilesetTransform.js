@@ -1,4 +1,4 @@
-import { composeMatrix, getFiniteMatrix4Array } from './viewerUtils.js';
+import { composeMatrix, getFiniteMatrix4Array } from '../utils.js';
 
 export function applySavedObjectMatrix(object, matrix) {
   composeMatrix(object, matrix);

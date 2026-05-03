@@ -1,4 +1,4 @@
-import { formatCoordinateInputValue } from './viewerUtils.js';
+import { formatCoordinateInputValue } from '../utils.js';
 
 export function parseCoordinateInputs({
   heightInput,

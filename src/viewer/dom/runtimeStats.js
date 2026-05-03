@@ -1,5 +1,5 @@
 import { isGaussianSplatScene } from '3d-tiles-rendererjs-3dgs-plugin';
-import { formatBytes, formatInteger } from './viewerUtils.js';
+import { formatBytes, formatInteger } from '../utils.js';
 
 const RUNTIME_STATS_UPDATE_INTERVAL_MS = 250;
 

@@ -2,7 +2,7 @@ import {
   clamp,
   exponentToGeometricErrorScale,
   formatGeometricErrorScale,
-} from './viewerUtils.js';
+} from '../utils.js';
 import {
   GEOMETRIC_ERROR_LAYER_SCALE_MAX_EXPONENT,
   GEOMETRIC_ERROR_LAYER_SCALE_MIN_EXPONENT,
@@ -10,7 +10,7 @@ import {
   GEOMETRIC_ERROR_SCALE_MAX_EXPONENT,
   GEOMETRIC_ERROR_SCALE_MIN_EXPONENT,
   GEOMETRIC_ERROR_SCALE_STEP,
-} from './viewerConfig.js';
+} from '../config.js';
 
 export function createGeometricErrorController({
   defaultErrorTarget,

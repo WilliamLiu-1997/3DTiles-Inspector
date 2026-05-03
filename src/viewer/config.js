@@ -1,5 +1,5 @@
 import { MathUtils } from 'three';
-import { normalizeLocalResourceUrl } from './viewerUtils.js';
+import { normalizeLocalResourceUrl } from './utils.js';
 
 export const SAVE_URL = new URL('../__inspector/save-transform', import.meta.url)
   .href;
