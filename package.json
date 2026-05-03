@@ -9,7 +9,7 @@
   "exports": {
     ".": "./src/index.js",
     "./cli": "./src/cli.js",
-    "./session": "./src/viewer/session.js"
+    "./session": "./src/server/session.js"
   },
   "bin": {
     "3dtiles-inspector": "bin/3dtiles-inspector.js"
@@ -56,7 +56,7 @@
   "devDependencies": {
     "@sparkjsdev/spark": "2.0.0",
     "3d-tiles-renderer": "0.4.24",
-    "3d-tiles-rendererjs-3dgs-plugin": "0.1.4",
+    "3d-tiles-rendererjs-3dgs-plugin": "0.1.5",
     "cesium": "1.140.0",
     "esbuild": "^0.25.11",
     "three": "0.180.0"
