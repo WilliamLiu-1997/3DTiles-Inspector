@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-03
+
+### Changed
+
+- Renamed the crop selection action to `Select Region` and show pending or newest crop regions first in the list.
+- Kept the Save/status controls fixed at the bottom of the sidebar, moved `Reset` into the Transform controls, and tightened sidebar behavior on narrow screens.
+
 ## [0.2.0] - 2026-05-03
 
 ### Added

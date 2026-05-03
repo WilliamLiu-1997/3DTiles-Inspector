@@ -30,17 +30,6 @@ export function updateCropControls({
   );
 
   cropListEl.replaceChildren();
-  screenSelections.forEach((selection, index) => {
-    cropListEl.appendChild(
-      createSelectionControl({
-        active: selection.id === activeScreenSelectionId,
-        label: `Region ${index + 1}`,
-        onScreenSelectionRemove,
-        onScreenSelectionSelect,
-        selection,
-      }),
-    );
-  });
   pendingScreenSelections.forEach((selection) => {
     cropListEl.appendChild(
       createSelectionControl({
@@ -52,6 +41,20 @@ export function updateCropControls({
       }),
     );
   });
+  screenSelections
+    .map((selection, index) => ({ label: `Region ${index + 1}`, selection }))
+    .reverse()
+    .forEach(({ label, selection }) => {
+      cropListEl.appendChild(
+        createSelectionControl({
+          active: selection.id === activeScreenSelectionId,
+          label,
+          onScreenSelectionRemove,
+          onScreenSelectionSelect,
+          selection,
+        }),
+      );
+    });
 }
 
 function createSelectionControl({

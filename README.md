@@ -101,7 +101,7 @@ const {
 
 The basic workflow is:
 
-1. Click `Screen Select` and drag a rectangle over the splats to remove.
+1. Click `Select Region` and drag a rectangle over the splats to remove.
 2. Drag the far-plane handle to set how deep the crop region extends into the scene.
 3. Click `Confirm` to add the region to the save list, or `Cancel` to discard the pending rectangle.
 4. Select a confirmed region row if you need to adjust its 3D far plane with the transform handle.

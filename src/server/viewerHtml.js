@@ -167,8 +167,8 @@ function buildViewerHtml(viewerConfig) {
 
       .toolbar {
         display: grid;
-        align-content: start;
-        gap: 8px;
+        grid-template-rows: minmax(0, 1fr) auto;
+        gap: 0;
         padding: 10px 14px;
         border: 1px solid rgba(22, 50, 79, 0.12);
         border-top: 0;
@@ -177,8 +177,7 @@ function buildViewerHtml(viewerConfig) {
         box-shadow: 0 18px 44px rgba(33, 52, 73, 0.16);
         backdrop-filter: blur(14px);
         min-height: 0;
-        overflow-y: auto;
-        overscroll-behavior: contain;
+        overflow: hidden;
         transition:
           opacity 160ms ease,
           transform 160ms ease;
@@ -215,8 +214,8 @@ function buildViewerHtml(viewerConfig) {
       .toolbar-dock.collapsed .toolbar-toggle {
         justify-self: start;
         width: auto;
-        min-height: 36px;
-        padding: 6px 12px 7px;
+        min-height: 32px;
+        padding: 4px 12px 5px;
         border-radius: 999px;
         color: #506377;
         background: rgba(255, 255, 255, 0.94);
@@ -247,6 +246,35 @@ function buildViewerHtml(viewerConfig) {
         border-radius: 14px;
         background:
           linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(243, 247, 251, 0.9));
+      }
+
+      .toolbar-scroll {
+        display: grid;
+        align-content: start;
+        gap: 8px;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-bottom: 8px;
+        scrollbar-color: rgba(93, 115, 139, 0.45) transparent;
+        scrollbar-width: thin;
+      }
+
+      .toolbar-scroll::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      .toolbar-scroll::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .toolbar-scroll::-webkit-scrollbar-thumb {
+        border-radius: 999px;
+        background: rgba(93, 115, 139, 0.32);
+      }
+
+      .toolbar-scroll::-webkit-scrollbar-thumb:hover {
+        background: rgba(93, 115, 139, 0.48);
       }
 
       .toolbar-section-header {
@@ -521,6 +549,11 @@ function buildViewerHtml(viewerConfig) {
       .status-panel {
         display: grid;
         gap: 10px;
+        margin-top: 8px;
+      }
+
+      .status-panel .status-actions {
+        grid-template-columns: 1fr;
       }
 
       .status-actions {
@@ -544,12 +577,14 @@ function buildViewerHtml(viewerConfig) {
         }
 
         .tile-runtime-stats {
-          right: 16px;
-          bottom: 16px;
-          left: 16px;
+          right: 50%;
+          bottom: 5px;
+          left: auto;
           flex-wrap: wrap;
-          justify-content: stretch;
-          max-width: none;
+          justify-content: center;
+          width: max-content;
+          max-width: calc(100vw - 32px);
+          transform: translateX(50%);
         }
 
         .runtime-stat {
@@ -564,15 +599,21 @@ function buildViewerHtml(viewerConfig) {
 
         .toolbar-dock {
           top: auto;
-          bottom: 16px;
+          bottom: 32px;
           right: 16px;
           left: 16px;
           width: auto;
-          max-height: min(78vh, 640px);
+          max-height: min(calc(78vh - 26px), 614px);
         }
 
         .toolbar {
-          max-height: min(calc(78vh - 44px), 596px);
+          max-height: min(calc(78vh - 70px), 570px);
+        }
+
+        .toolbar-dock.collapsed .toolbar-toggle {
+          justify-self: center;
+          min-height: 28px;
+          padding: 3px 12px 4px;
         }
 
         .coordinate-actions button,
@@ -627,90 +668,92 @@ function buildViewerHtml(viewerConfig) {
         Hide Sidebar
       </button>
       <div id="toolbar" class="toolbar">
-        <div class="toolbar-section" data-save-lock-exempt>
-          <div class="toolbar-section-header">
-            <p class="toolbar-section-title">Canvas</p>
-          </div>
-          <div class="coordinate-actions">
-            <button id="terrain" class="wide" type="button">Terrain</button>
-            <button id="bounding-volume" class="wide" type="button">Bounding Volume</button>
-            <button id="move-to-tiles" type="button">Move To Tiles</button>
-          </div>
-        </div>
-        <div class="toolbar-section">
-          <div class="toolbar-section-header">
-            <p class="toolbar-section-title">Transform</p>
-          </div>
-          <div class="transform-actions">
-            <button id="translate" type="button">Translate</button>
-            <button id="rotate" type="button">Rotate</button>
-            <button id="set-position" class="full-span" type="button">Set Position</button>
-          </div>
-        </div>
-        <div class="toolbar-section">
-          <div class="toolbar-section-header">
-            <p class="toolbar-section-title">Coordinate</p>
-          </div>
-          <div class="coordinate-grid">
-            <label><span>Latitude</span><input id="latitude" type="number" step="any" value="0" /></label>
-            <label><span>Longitude</span><input id="longitude" type="number" step="any" value="0" /></label>
-            <label><span>Height</span><input id="height" type="number" step="any" value="0" /></label>
-          </div>
-          <div class="coordinate-actions">
-            <button id="move-camera-to-coordinate" class="wide" type="button">Move Camera</button>
-            <button id="move-tiles-to-coordinate" class="wide" type="button">Move Tiles</button>
-          </div>
-        </div>
-        <div class="toolbar-section">
-          <div class="toolbar-section-header">
-            <p class="toolbar-section-title">LOD</p>
-          </div>
-          <label class="range-field">
-            <div class="range-field-header">
-              <span>Geometric Error</span>
-              <p id="geometric-error-value" class="toolbar-value">x1.00</p>
+        <div class="toolbar-scroll">
+          <div class="toolbar-section" data-save-lock-exempt>
+            <div class="toolbar-section-header">
+              <p class="toolbar-section-title">Canvas</p>
             </div>
-            <input
-              id="geometric-error-scale"
-              type="range"
-              min="-4"
-              max="4"
-              step="0.1"
-              value="0"
-            />
-          </label>
-          <label class="range-field">
-            <div class="range-field-header">
-              <span>Layer Multiplier</span>
-              <p id="geometric-error-layer-value" class="toolbar-value">x1.00</p>
+            <div class="coordinate-actions">
+              <button id="terrain" class="wide" type="button">Terrain</button>
+              <button id="bounding-volume" class="wide" type="button">Bounding Volume</button>
+              <button id="move-to-tiles" type="button">Move To Tiles</button>
             </div>
-            <input
-              id="geometric-error-layer-scale"
-              type="range"
-              min="-3"
-              max="3"
-              step="0.1"
-              value="0"
-            />
-          </label>
-        </div>
-        <div id="crop-section" class="toolbar-section" hidden>
-          <div class="toolbar-section-header">
-            <p class="toolbar-section-title">Crop Regions</p>
-            <p id="crop-count-value" class="toolbar-value">0</p>
           </div>
-          <div class="coordinate-actions">
-            <button id="crop-screen-select" class="wide" type="button">Screen Select</button>
+          <div class="toolbar-section">
+            <div class="toolbar-section-header">
+              <p class="toolbar-section-title">Transform</p>
+            </div>
+            <div class="transform-actions">
+              <button id="translate" type="button">Translate</button>
+              <button id="rotate" type="button">Rotate</button>
+              <button id="set-position" type="button">Set Position</button>
+              <button id="reset" type="button">Reset</button>
+            </div>
           </div>
-          <div id="crop-list" class="crop-list"></div>
-          <div class="status-actions">
-            <button id="crop-screen-confirm" type="button">Confirm</button>
-            <button id="crop-screen-cancel" type="button">Cancel</button>
+          <div class="toolbar-section">
+            <div class="toolbar-section-header">
+              <p class="toolbar-section-title">Coordinate</p>
+            </div>
+            <div class="coordinate-grid">
+              <label><span>Latitude</span><input id="latitude" type="number" step="any" value="0" /></label>
+              <label><span>Longitude</span><input id="longitude" type="number" step="any" value="0" /></label>
+              <label><span>Height</span><input id="height" type="number" step="any" value="0" /></label>
+            </div>
+            <div class="coordinate-actions">
+              <button id="move-camera-to-coordinate" class="wide" type="button">Move Camera</button>
+              <button id="move-tiles-to-coordinate" class="wide" type="button">Move Tiles</button>
+            </div>
+          </div>
+          <div class="toolbar-section">
+            <div class="toolbar-section-header">
+              <p class="toolbar-section-title">LOD</p>
+            </div>
+            <label class="range-field">
+              <div class="range-field-header">
+                <span>Geometric Error</span>
+                <p id="geometric-error-value" class="toolbar-value">x1.00</p>
+              </div>
+              <input
+                id="geometric-error-scale"
+                type="range"
+                min="-4"
+                max="4"
+                step="0.1"
+                value="0"
+              />
+            </label>
+            <label class="range-field">
+              <div class="range-field-header">
+                <span>Layer Multiplier</span>
+                <p id="geometric-error-layer-value" class="toolbar-value">x1.00</p>
+              </div>
+              <input
+                id="geometric-error-layer-scale"
+                type="range"
+                min="-3"
+                max="3"
+                step="0.1"
+                value="0"
+              />
+            </label>
+          </div>
+          <div id="crop-section" class="toolbar-section" hidden>
+            <div class="toolbar-section-header">
+              <p class="toolbar-section-title">Crop Regions</p>
+              <p id="crop-count-value" class="toolbar-value">0</p>
+            </div>
+            <div class="coordinate-actions">
+              <button id="crop-screen-select" class="wide" type="button">Select Region</button>
+            </div>
+            <div id="crop-list" class="crop-list"></div>
+            <div class="status-actions">
+              <button id="crop-screen-confirm" type="button">Confirm</button>
+              <button id="crop-screen-cancel" type="button">Cancel</button>
+            </div>
           </div>
         </div>
         <div class="toolbar-section status-panel">
           <div class="status-actions">
-            <button id="reset" type="button">Reset</button>
             <button id="save" class="save" type="button">Save</button>
           </div>
           <progress id="save-progress" class="save-progress" max="100" value="0" hidden></progress>
