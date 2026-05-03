@@ -6,6 +6,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-03
+
+### Fixed
+
+- Declared the server-side crop dependencies as runtime dependencies so installed packages can load `three` and `@sparkjsdev/spark`.
+
 ## [0.2.1] - 2026-05-03
 
 ### Changed
