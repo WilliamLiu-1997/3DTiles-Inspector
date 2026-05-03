@@ -83,7 +83,7 @@ const {
 
 ## Inspector Features
 
-<img src="https://raw.githubusercontent.com/WilliamLiu-1997/3DTiles-Inspector/main/screenshot.png" alt="screenshot" width="960" />
+<img src="https://raw.githubusercontent.com/WilliamLiu-1997/3DTiles-Inspector/main/screenshot.png" alt="screenshot" />
 
 - `Translate`, `Rotate`, and `Reset` for root transform edits
 - `Move Camera` to a WGS84 latitude / longitude / height
@@ -102,9 +102,12 @@ const {
 The basic workflow is:
 
 1. Click `Screen Select` and drag a rectangle over the splats to remove.
-2. Click `Confirm` to add the region to the save list, or `Cancel` to discard the pending rectangle.
-3. Select a confirmed region row if you need to adjust its 3D far plane with the transform handle.
-4. Click `Save` to persist the root transform and delete splats inside the confirmed crop regions.
+2. Drag the far-plane handle to set how deep the crop region extends into the scene.
+3. Click `Confirm` to add the region to the save list, or `Cancel` to discard the pending rectangle.
+4. Select a confirmed region row if you need to adjust its 3D far plane with the transform handle.
+5. Click `Save` to persist the root transform and delete splats inside the confirmed crop regions.
+
+<img src="https://raw.githubusercontent.com/WilliamLiu-1997/3DTiles-Inspector/main/region.png" alt="Crop Regions" />
 
 Crop saving rewrites supported local `.gltf` / `.glb` Gaussian Splat resources that use `KHR_gaussian_splatting_compression_spz_2`. Fully deleted splat primitives are removed from their glTF, and empty tile content can be pruned from the tileset JSON. Remote content and unsupported Gaussian Splat encodings are rejected instead of being modified.
 
