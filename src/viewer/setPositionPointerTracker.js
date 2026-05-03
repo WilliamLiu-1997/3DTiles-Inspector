@@ -46,10 +46,6 @@ export function createSetPositionPointerTracker({
     }
   }
 
-  function handlePointerMove(event) {
-    updatePointerMovement(event);
-  }
-
   function pointerMatchesStart(event) {
     if (!pointerStart) {
       return false;
@@ -93,7 +89,7 @@ export function createSetPositionPointerTracker({
     clear,
     handlePointerCancel,
     handlePointerDown,
-    handlePointerMove,
+    handlePointerMove: updatePointerMovement,
     handlePointerUp,
   };
 }

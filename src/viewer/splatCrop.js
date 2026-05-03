@@ -1049,27 +1049,28 @@ function collectCandidateSplatResources({
 }
 
 function markSplatResourceProgress(context, resourcePath) {
+  const progress = context.progress;
   if (
-    !context.progress ||
-    typeof context.progress.onProgress !== 'function' ||
-    context.progressedResources.has(resourcePath)
+    !progress ||
+    typeof progress.onProgress !== 'function' ||
+    progress.processedResourcePaths.has(resourcePath)
   ) {
     return;
   }
 
-  context.progressedResources.add(resourcePath);
-  context.progress.completedResources += 1;
-  const totalResources = context.progress.totalResources;
+  progress.processedResourcePaths.add(resourcePath);
+  progress.completedResources += 1;
+  const totalResources = progress.totalResources;
   const percent =
     totalResources > 0
-      ? (context.progress.completedResources / totalResources) * 100
+      ? (progress.completedResources / totalResources) * 100
       : 100;
 
-  context.progress.onProgress({
-    completedResources: context.progress.completedResources,
+  progress.onProgress({
+    completedResources: progress.completedResources,
     message:
       totalResources > 0
-        ? `Deleting cropped splats (${context.progress.completedResources}/${totalResources} resources)...`
+        ? `Deleting cropped splats (${progress.completedResources}/${totalResources} resources)...`
         : 'Deleting cropped splats...',
     percent,
     phase: 'crop',
@@ -1282,7 +1283,6 @@ async function processNestedTilesetContentSlot(
     processedResources: context.processedResources,
     emptySplatResources: context.emptySplatResources,
     progress: context.progress,
-    progressedResources: context.progressedResources,
     resourceLocks: context.resourceLocks,
     workerPool: context.workerPool,
   });
@@ -1384,7 +1384,6 @@ async function traverseTileset({
   processedResources,
   emptySplatResources,
   progress,
-  progressedResources,
   resourceLocks,
   workerPool,
 }) {
@@ -1412,7 +1411,6 @@ async function traverseTileset({
     deletedSplats: 0,
     emptySplatResources,
     progress,
-    progressedResources,
     processedResources,
     processedSplatResources: 0,
     resourceLocks,
@@ -1508,9 +1506,9 @@ async function deleteSplatsInNormalizedSelections(
       progress: {
         completedResources: 0,
         onProgress,
+        processedResourcePaths: new Set(),
         totalResources,
       },
-      progressedResources: new Set(),
       resourceLocks: new Map(),
       workerPool,
     });

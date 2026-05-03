@@ -3,7 +3,6 @@ export function updateCropControls({
   elements,
   onScreenSelectionRemove,
   onScreenSelectionSelect,
-  pendingScreenSelectionCount,
   pendingScreenSelectionMode,
   pendingScreenSelections,
   screenSelections,
@@ -16,7 +15,7 @@ export function updateCropControls({
     cropScreenConfirmButton,
     cropScreenSelectButton,
   } = elements;
-  const hasPendingScreenSelection = pendingScreenSelectionCount > 0;
+  const hasPendingScreenSelection = pendingScreenSelections.length > 0;
 
   cropScreenSelectButton.disabled =
     !tilesetHasGaussianSplats || hasPendingScreenSelection;
@@ -43,15 +42,15 @@ export function updateCropControls({
     );
   });
   pendingScreenSelections.forEach((selection) => {
-    const control = createSelectionControl({
-      active: selection.id === activeScreenSelectionId,
-      label: 'Pending',
-      onScreenSelectionRemove,
-      onScreenSelectionSelect,
-      selection,
-    });
-    control.classList.add('active');
-    cropListEl.appendChild(control);
+    cropListEl.appendChild(
+      createSelectionControl({
+        active: selection.id === activeScreenSelectionId,
+        label: 'Pending',
+        onScreenSelectionRemove,
+        onScreenSelectionSelect,
+        selection,
+      }),
+    );
   });
 }
 
@@ -68,7 +67,7 @@ function createSelectionControl({
   const farValue = document.createElement('span');
   const removeButton = document.createElement('button');
 
-  control.classList.add('screen-region', 'exclude-region');
+  control.classList.add('screen-region');
   control.classList.toggle('selected', !!active);
   control.tabIndex = 0;
   header.classList.add('screen-region-header');

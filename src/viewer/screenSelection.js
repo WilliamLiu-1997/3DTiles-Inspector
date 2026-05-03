@@ -25,14 +25,12 @@ const SCREEN_SELECTION_HIDDEN_ALPHA = 0;
 const SCREEN_SELECTION_FAR_HANDLE_COLOR = 0xffffff;
 const SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER = 1000000;
 const SCREEN_SELECTION_FAR_HANDLE_GRID_DIVISIONS = 8;
-const SCREEN_SELECTION_FAR_HANDLE_LINE_WIDTH = 1.25;
+const SCREEN_SELECTION_FAR_HANDLE_GUIDE_LINE_WIDTH = 0.5;
+const SCREEN_SELECTION_FAR_HANDLE_LINE_WIDTH = 1;
 const SCREEN_SELECTION_MIN_DRAG_DISTANCE_SQ = 16;
 const SCREEN_SELECTION_MIN_DEPTH_RANGE = 0.001;
 const WORLD_Z = new Vector3(0, 0, 1);
 const UNIT_SCALE = new Vector3(1, 1, 1);
-const FAR_HANDLE_GRID_GEOMETRY = createFarHandleGridGeometry(
-  SCREEN_SELECTION_FAR_HANDLE_GRID_DIVISIONS,
-);
 
 const dragStart = new Vector2();
 const dragCurrent = new Vector2();
@@ -52,6 +50,7 @@ const farPlaneRight = new Vector3();
 const farPlaneUp = new Vector3();
 const farPlaneNormal = new Vector3();
 const farPlaneCenterOffset = new Vector3();
+const farPlaneCornerOffset = new Vector3();
 const plane = new Plane();
 const selectionCurrentTransformMatrix = new Matrix4();
 const selectionReferenceTransformMatrix = new Matrix4();
@@ -63,23 +62,6 @@ const transformedPlane = new Plane();
 const IDENTITY_MATRIX4 = Object.freeze([
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 ]);
-
-function createFarHandleGridGeometry(divisions) {
-  const vertices = [];
-  const addSegment = (x1, y1, x2, y2) => {
-    vertices.push(x1, y1, 0, x2, y2, 0);
-  };
-
-  for (let index = 0; index <= divisions; index++) {
-    const value = -0.5 + index / divisions;
-    addSegment(value, -0.5, value, 0.5);
-    addSegment(-0.5, value, 0.5, value);
-  }
-
-  const geometry = new LineSegmentsGeometry();
-  geometry.setPositions(vertices);
-  return geometry;
-}
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -106,15 +88,31 @@ function copyMatrix4Array(value, fallback = IDENTITY_MATRIX4) {
     : fallback.slice();
 }
 
+function copyPlaneCorners(value, width, height) {
+  if (Array.isArray(value) && value.length === 4) {
+    return value.map((corner) =>
+      Array.isArray(corner) && corner.length >= 2
+        ? [
+            Number(corner[0]) || 0,
+            Number(corner[1]) || 0,
+            Number(corner[2]) || 0,
+          ]
+        : [0, 0],
+    );
+  }
+
+  return [
+    [-width * 0.5, height * 0.5],
+    [width * 0.5, height * 0.5],
+    [width * 0.5, -height * 0.5],
+    [-width * 0.5, -height * 0.5],
+  ];
+}
+
 function getSelectionForward(selection, target = selectionForward) {
-  target.fromArray(
-    copyVectorArray(
-      selection?.selectionForward,
-      selection?.cameraForward || [0, 0, -1],
-    ),
-  );
+  target.fromArray(copyVectorArray(selection?.selectionForward, [0, 0, -1]));
   if (target.lengthSq() < 1e-12) {
-    target.fromArray(copyVectorArray(selection?.cameraForward, [0, 0, -1]));
+    target.set(0, 0, -1);
   }
   return target.normalize();
 }
@@ -130,11 +128,143 @@ function copyFarPlane(value) {
   );
   return {
     centerOffset: copyVectorArray(value?.centerOffset),
+    corners: copyPlaneCorners(value?.corners, width, height),
     height,
+    nearCorners: copyPlaneCorners(value?.nearCorners, width, height),
     right: copyVectorArray(value?.right, [1, 0, 0]),
     up: copyVectorArray(value?.up, [0, 1, 0]),
     width,
   };
+}
+
+function pushFarHandleSegment(vertices, start, end) {
+  vertices.push(start[0], start[1], start[2] || 0, end[0], end[1], end[2] || 0);
+}
+
+function getCurrentFarPlaneCorner(corner, ratio) {
+  return [corner[0] * ratio, corner[1] * ratio, 0];
+}
+
+function getCurrentNearPlaneCorner(corner, selection) {
+  return [
+    corner[0],
+    corner[1],
+    (corner[2] || 0) +
+      selection.depthRange.maxFarDepth -
+      selection.depthRange.farDepth,
+  ];
+}
+
+function lerpFarPlaneCorner(a, b, t) {
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    (a[2] || 0) + ((b[2] || 0) - (a[2] || 0)) * t,
+  ];
+}
+
+function getCurrentFarHandleCorners(selection) {
+  const ratio = getFarDepthRatio(selection);
+  const [topLeft, topRight, bottomRight, bottomLeft] =
+    selection.farPlane.corners.map((corner) =>
+      getCurrentFarPlaneCorner(corner, ratio),
+    );
+  const [nearTopLeft, nearTopRight, nearBottomRight, nearBottomLeft] =
+    selection.farPlane.nearCorners.map((corner) =>
+      getCurrentNearPlaneCorner(corner, selection),
+    );
+
+  return {
+    bottomLeft,
+    bottomRight,
+    nearBottomLeft,
+    nearBottomRight,
+    nearTopLeft,
+    nearTopRight,
+    topLeft,
+    topRight,
+  };
+}
+
+function createFarHandleGridPositions(selection) {
+  const { bottomLeft, bottomRight, topLeft, topRight } =
+    getCurrentFarHandleCorners(selection);
+  const vertices = [];
+
+  for (
+    let index = 0;
+    index <= SCREEN_SELECTION_FAR_HANDLE_GRID_DIVISIONS;
+    index++
+  ) {
+    const t = index / SCREEN_SELECTION_FAR_HANDLE_GRID_DIVISIONS;
+    pushFarHandleSegment(
+      vertices,
+      lerpFarPlaneCorner(topLeft, topRight, t),
+      lerpFarPlaneCorner(bottomLeft, bottomRight, t),
+    );
+    pushFarHandleSegment(
+      vertices,
+      lerpFarPlaneCorner(topLeft, bottomLeft, t),
+      lerpFarPlaneCorner(topRight, bottomRight, t),
+    );
+  }
+
+  return vertices;
+}
+
+function createFarHandleGuidePositions(selection) {
+  const {
+    bottomLeft,
+    bottomRight,
+    nearBottomLeft,
+    nearBottomRight,
+    nearTopLeft,
+    nearTopRight,
+    topLeft,
+    topRight,
+  } = getCurrentFarHandleCorners(selection);
+  const vertices = [];
+
+  pushFarHandleSegment(vertices, nearTopLeft, nearTopRight);
+  pushFarHandleSegment(vertices, nearTopRight, nearBottomRight);
+  pushFarHandleSegment(vertices, nearBottomRight, nearBottomLeft);
+  pushFarHandleSegment(vertices, nearBottomLeft, nearTopLeft);
+  pushFarHandleSegment(vertices, nearTopLeft, topLeft);
+  pushFarHandleSegment(vertices, nearBottomLeft, bottomLeft);
+  pushFarHandleSegment(vertices, nearTopRight, topRight);
+  pushFarHandleSegment(vertices, nearBottomRight, bottomRight);
+
+  return vertices;
+}
+
+function createFarHandleGeometry(positions) {
+  const geometry = new LineSegmentsGeometry();
+  geometry.setPositions(positions);
+  return geometry;
+}
+
+function createFarHandleGridGeometry(selection) {
+  return createFarHandleGeometry(createFarHandleGridPositions(selection));
+}
+
+function createFarHandleGuideGeometry(selection) {
+  return createFarHandleGeometry(createFarHandleGuidePositions(selection));
+}
+
+function updateFarHandleGridGeometry(selection) {
+  selection.farHandleGridGeometry?.setPositions(
+    createFarHandleGridPositions(selection),
+  );
+}
+
+function updateFarHandleGuideGeometry(selection) {
+  if (!selection.farHandleGuideGeometry) {
+    return;
+  }
+
+  selection.farHandleGuideGeometry.setPositions(
+    createFarHandleGuidePositions(selection),
+  );
 }
 
 function getClampedClientPoint(event, domRect, target) {
@@ -341,6 +471,23 @@ function pushPlaneMatrixFromNormal(matrices, normal, point, insidePoint) {
   );
 }
 
+function normalizeFarPlaneAxes(normal, right, up) {
+  up.addScaledVector(normal, -up.dot(normal));
+  if (up.lengthSq() >= 1e-12) {
+    up.normalize();
+    right.crossVectors(up, normal).normalize();
+    return true;
+  }
+
+  right.addScaledVector(normal, -right.dot(normal));
+  if (right.lengthSq() < 1e-12) {
+    return false;
+  }
+  right.normalize();
+  up.crossVectors(normal, right).normalize();
+  return true;
+}
+
 function createFarPlaneData({
   cameraPosition: sourceCameraPosition,
   farBottomLeft,
@@ -349,36 +496,18 @@ function createFarPlaneData({
   farNormal,
   farTopLeft,
   farTopRight,
+  nearBottomLeft,
+  nearBottomRight,
+  nearCenter,
+  nearTopLeft,
+  nearTopRight,
 }) {
   const normal = farNormal.clone().normalize();
-  const right = farTopRight
-    .clone()
-    .sub(farTopLeft)
-    .addScaledVector(normal, -farTopRight.clone().sub(farTopLeft).dot(normal));
-  if (right.lengthSq() < 1e-12) {
+  const right = farTopRight.clone().sub(farTopLeft);
+  const up = farTopLeft.clone().sub(farBottomLeft);
+  if (!normalizeFarPlaneAxes(normal, right, up)) {
     return null;
   }
-  right.normalize();
-
-  const up = farTopLeft
-    .clone()
-    .sub(farBottomLeft)
-    .addScaledVector(
-      normal,
-      -farTopLeft.clone().sub(farBottomLeft).dot(normal),
-    );
-  if (up.lengthSq() < 1e-12) {
-    up.crossVectors(normal, right);
-  }
-  if (up.lengthSq() < 1e-12) {
-    return null;
-  }
-  up.normalize();
-  farPlaneNormal.crossVectors(normal, right).normalize();
-  if (farPlaneNormal.dot(up) < 0) {
-    farPlaneNormal.negate();
-  }
-  up.copy(farPlaneNormal);
 
   const corners = [farTopLeft, farTopRight, farBottomRight, farBottomLeft];
   const minRight = Math.min(...corners.map((point) => point.dot(right)));
@@ -393,9 +522,26 @@ function createFarPlaneData({
 
   return {
     centerOffset: farCenter.clone().sub(sourceCameraPosition).toArray(),
+    corners: corners.map((corner) => {
+      farPlaneCornerOffset.copy(corner).sub(farCenter);
+      return [farPlaneCornerOffset.dot(right), farPlaneCornerOffset.dot(up)];
+    }),
     height,
-    right: right.normalize().toArray(),
-    up: up.normalize().toArray(),
+    nearCorners: [
+      nearTopLeft,
+      nearTopRight,
+      nearBottomRight,
+      nearBottomLeft,
+    ].map((corner) => {
+      farPlaneCornerOffset.copy(corner).sub(farCenter);
+      return [
+        farPlaneCornerOffset.dot(right),
+        farPlaneCornerOffset.dot(up),
+        farPlaneCornerOffset.dot(normal),
+      ];
+    }),
+    right: right.toArray(),
+    up: up.toArray(),
     width,
   };
 }
@@ -434,35 +580,67 @@ function createFrustumData(camera, rect, depthRange) {
     .add(camera.position);
   plane.setFromNormalAndCoplanarPoint(selectionForward, farCenter);
 
+  const farClipPlane = plane.clone();
   const farTopLeft = createPointOnPlane(
     camera,
     rect.minX,
     rect.maxY,
-    plane,
+    farClipPlane,
   );
   const farTopRight = createPointOnPlane(
     camera,
     rect.maxX,
     rect.maxY,
-    plane,
+    farClipPlane,
   );
   const farBottomRight = createPointOnPlane(
     camera,
     rect.maxX,
     rect.minY,
-    plane,
+    farClipPlane,
   );
   const farBottomLeft = createPointOnPlane(
     camera,
     rect.minX,
     rect.minY,
-    plane,
+    farClipPlane,
+  );
+
+  plane.setFromNormalAndCoplanarPoint(selectionForward, nearCenter);
+  const nearPlane = plane.clone();
+  const nearTopLeft = createPointOnPlane(
+    camera,
+    rect.minX,
+    rect.maxY,
+    nearPlane,
+  );
+  const nearTopRight = createPointOnPlane(
+    camera,
+    rect.maxX,
+    rect.maxY,
+    nearPlane,
+  );
+  const nearBottomRight = createPointOnPlane(
+    camera,
+    rect.maxX,
+    rect.minY,
+    nearPlane,
+  );
+  const nearBottomLeft = createPointOnPlane(
+    camera,
+    rect.minX,
+    rect.minY,
+    nearPlane,
   );
   if (
     !farTopLeft ||
     !farTopRight ||
     !farBottomRight ||
-    !farBottomLeft
+    !farBottomLeft ||
+    !nearTopLeft ||
+    !nearTopRight ||
+    !nearBottomRight ||
+    !nearBottomLeft
   ) {
     return null;
   }
@@ -512,7 +690,7 @@ function createFrustumData(camera, rect, depthRange) {
     return null;
   }
 
-  const farPlane = createFarPlaneData({
+  const farPlaneData = createFarPlaneData({
     cameraPosition: camera.position,
     farBottomLeft,
     farBottomRight,
@@ -520,8 +698,13 @@ function createFrustumData(camera, rect, depthRange) {
     farNormal: selectionForward,
     farTopLeft,
     farTopRight,
+    nearBottomLeft,
+    nearBottomRight,
+    nearCenter,
+    nearTopLeft,
+    nearTopRight,
   });
-  if (!farPlane) {
+  if (!farPlaneData) {
     return null;
   }
 
@@ -531,7 +714,7 @@ function createFrustumData(camera, rect, depthRange) {
       maxFarDepth: farDistance,
       nearDepth: nearDistance,
     },
-    farPlane,
+    farPlane: farPlaneData,
     planeMatrices: matrices,
     selectionForward: selectionForward.toArray(),
   };
@@ -559,7 +742,6 @@ function createSelectionData({
   const rect = getNdcSelectionRect(clientRect, domRect);
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld(true);
-  camera.getWorldDirection(cameraForward);
   cameraPosition.copy(camera.position);
   const depthRange = normalizeDepthRange(camera, getDepthRange());
   const viewProjectionMatrix = new Matrix4()
@@ -571,7 +753,6 @@ function createSelectionData({
   }
 
   return {
-    cameraForward: cameraForward.toArray(),
     cameraPosition: cameraPosition.toArray(),
     depthRange: frustum.depthRange,
     farPlane: frustum.farPlane,
@@ -644,20 +825,6 @@ function transformPlaneMatrix(matrixArray, transformMatrix) {
   );
 }
 
-function getFarHandleScale(selection) {
-  const ratio = getFarDepthRatio(selection);
-  return {
-    height: Math.max(
-      SCREEN_SELECTION_MIN_DEPTH_RANGE,
-      selection.farPlane.height * ratio,
-    ),
-    width: Math.max(
-      SCREEN_SELECTION_MIN_DEPTH_RANGE,
-      selection.farPlane.width * ratio,
-    ),
-  };
-}
-
 function getFarDepthRatio(selection) {
   const depthRange = selection.depthRange;
   return depthRange.maxFarDepth > 0
@@ -665,28 +832,43 @@ function getFarDepthRatio(selection) {
     : 1;
 }
 
+function createFarHandleLineMaterial({ depthTest, linewidth, opacity = 1 }) {
+  return new LineMaterial({
+    color: SCREEN_SELECTION_FAR_HANDLE_COLOR,
+    depthTest,
+    depthWrite: depthTest,
+    linewidth,
+    opacity,
+    transparent: opacity < 1,
+  });
+}
+
 export function createScreenSelectionFarHandle(selection) {
   const handle = new Group();
-  const solidMaterial = new LineMaterial({
-    color: SCREEN_SELECTION_FAR_HANDLE_COLOR,
+  const solidMaterial = createFarHandleLineMaterial({
     depthTest: true,
-    depthWrite: true,
     linewidth: SCREEN_SELECTION_FAR_HANDLE_LINE_WIDTH,
-    transparent: false,
   });
-  const overlayMaterial = new LineMaterial({
-    color: SCREEN_SELECTION_FAR_HANDLE_COLOR,
+  const overlayMaterial = createFarHandleLineMaterial({
     depthTest: false,
-    depthWrite: false,
     linewidth: SCREEN_SELECTION_FAR_HANDLE_LINE_WIDTH,
     opacity: 0.35,
-    transparent: true,
   });
-  const solidGrid = new LineSegments2(FAR_HANDLE_GRID_GEOMETRY, solidMaterial);
-  const overlayGrid = new LineSegments2(
-    FAR_HANDLE_GRID_GEOMETRY,
-    overlayMaterial,
-  );
+  const solidGuideMaterial = createFarHandleLineMaterial({
+    depthTest: true,
+    linewidth: SCREEN_SELECTION_FAR_HANDLE_GUIDE_LINE_WIDTH,
+  });
+  const overlayGuideMaterial = createFarHandleLineMaterial({
+    depthTest: false,
+    linewidth: SCREEN_SELECTION_FAR_HANDLE_GUIDE_LINE_WIDTH,
+    opacity: 0.35,
+  });
+  const gridGeometry = createFarHandleGridGeometry(selection);
+  const guideGeometry = createFarHandleGuideGeometry(selection);
+  const solidGrid = new LineSegments2(gridGeometry, solidMaterial);
+  const overlayGrid = new LineSegments2(gridGeometry, overlayMaterial);
+  const solidGuide = new LineSegments2(guideGeometry, solidGuideMaterial);
+  const overlayGuide = new LineSegments2(guideGeometry, overlayGuideMaterial);
 
   handle.name = `Screen Selection ${selection.id} Far`;
   handle.renderOrder = SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER;
@@ -696,10 +878,18 @@ export function createScreenSelectionFarHandle(selection) {
   solidGrid.renderOrder = SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER;
   overlayGrid.name = `${handle.name} Grid Overlay`;
   overlayGrid.renderOrder = SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER + 1;
-  handle.add(solidGrid, overlayGrid);
+  solidGuide.name = `${handle.name} Guide`;
+  solidGuide.renderOrder = SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER;
+  overlayGuide.name = `${handle.name} Guide Overlay`;
+  overlayGuide.renderOrder = SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER + 1;
+  handle.add(solidGrid, solidGuide, overlayGrid, overlayGuide);
   selection.farHandle = handle;
+  selection.farHandleGridGeometry = gridGeometry;
   selection.farHandleGridOverlay = overlayGrid;
   selection.farHandleGridSolid = solidGrid;
+  selection.farHandleGuideGeometry = guideGeometry;
+  selection.farHandleGuideOverlay = overlayGuide;
+  selection.farHandleGuideSolid = solidGuide;
   updateScreenSelectionFarHandle(selection, true);
   return handle;
 }
@@ -715,9 +905,15 @@ export function disposeScreenSelectionFarHandle(selection) {
       object.material.dispose();
     }
   });
+  selection.farHandleGridGeometry?.dispose();
+  selection.farHandleGuideGeometry?.dispose();
   selection.farHandle = null;
+  selection.farHandleGridGeometry = null;
   selection.farHandleGridOverlay = null;
   selection.farHandleGridSolid = null;
+  selection.farHandleGuideGeometry = null;
+  selection.farHandleGuideOverlay = null;
+  selection.farHandleGuideSolid = null;
 }
 
 export function getScreenSelectionFarDepthFromPosition(
@@ -765,24 +961,9 @@ export function updateScreenSelectionFarHandle(
   selectionForward.transformDirection(delta).normalize();
   farPlaneRight.transformDirection(delta).normalize();
   farPlaneUp.transformDirection(delta).normalize();
-  farPlaneRight.addScaledVector(
-    selectionForward,
-    -farPlaneRight.dot(selectionForward),
-  );
-  if (farPlaneRight.lengthSq() < 1e-12) {
-    farPlaneRight.crossVectors(farPlaneUp, selectionForward);
+  if (!normalizeFarPlaneAxes(selectionForward, farPlaneRight, farPlaneUp)) {
+    return;
   }
-  farPlaneRight.normalize();
-  farPlaneUp.addScaledVector(selectionForward, -farPlaneUp.dot(selectionForward));
-  if (farPlaneUp.lengthSq() < 1e-12) {
-    farPlaneUp.crossVectors(selectionForward, farPlaneRight);
-  }
-  farPlaneUp.normalize();
-  farPlaneNormal.crossVectors(selectionForward, farPlaneRight).normalize();
-  if (farPlaneNormal.dot(farPlaneUp) < 0) {
-    farPlaneNormal.negate();
-  }
-  farPlaneUp.copy(farPlaneNormal);
 
   const matrix = new Matrix4().makeBasis(
     farPlaneRight,
@@ -793,15 +974,17 @@ export function updateScreenSelectionFarHandle(
   handle.quaternion.setFromRotationMatrix(matrix);
   handle.scale.set(1, 1, 1);
 
-  const scale = getFarHandleScale(selection);
-  selection.farHandleGridOverlay?.scale.set(scale.width, scale.height, 1);
-  selection.farHandleGridSolid?.scale.set(scale.width, scale.height, 1);
+  updateFarHandleGridGeometry(selection);
+  updateFarHandleGuideGeometry(selection);
+  selection.farHandleGridOverlay?.scale.set(1, 1, 1);
+  selection.farHandleGridSolid?.scale.set(1, 1, 1);
+  selection.farHandleGuideOverlay?.scale.set(1, 1, 1);
+  selection.farHandleGuideSolid?.scale.set(1, 1, 1);
   handle.visible = !!active;
   handle.updateMatrixWorld(true);
 }
 
 export function createScreenSelection({
-  cameraForward: sourceCameraForward,
   cameraPosition: sourceCameraPosition,
   depthRange,
   farPlane,
@@ -817,7 +1000,6 @@ export function createScreenSelection({
   return {
     action: SCREEN_SELECTION_ACTION_EXCLUDE,
     basePlaneMatrices: copiedPlaneMatrices.map((matrix) => matrix.slice()),
-    cameraForward: copyVectorArray(sourceCameraForward, [0, 0, -1]),
     cameraPosition: copyVectorArray(sourceCameraPosition),
     currentTransformMatrix: referenceTransformMatrix.slice(),
     depthRange: copyDepthRange(depthRange),
@@ -826,10 +1008,7 @@ export function createScreenSelection({
     planeMatrices: copiedPlaneMatrices,
     referenceTransformMatrix,
     rect: copyRect(rect),
-    selectionForward: copyVectorArray(
-      sourceSelectionForward,
-      copyVectorArray(sourceCameraForward, [0, 0, -1]),
-    ),
+    selectionForward: copyVectorArray(sourceSelectionForward, [0, 0, -1]),
     sdfs: createScreenSelectionSdfs(copiedPlaneMatrices),
     viewProjectionMatrix: viewProjectionMatrix.slice(),
   };

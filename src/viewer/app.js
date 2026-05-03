@@ -667,7 +667,6 @@ function updateCropButtons() {
   updateCropControls({
     activeScreenSelectionId: activeCropScreenSelectionId,
     elements: viewerElements,
-    pendingScreenSelectionCount: pendingCropScreenSelections.length,
     pendingScreenSelectionMode: pendingCropScreenSelectionMode,
     screenSelections: cropScreenSelections,
     pendingScreenSelections: pendingCropScreenSelections,

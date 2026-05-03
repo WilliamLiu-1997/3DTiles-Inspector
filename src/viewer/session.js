@@ -1421,6 +1421,8 @@ function buildViewerHtml(viewerConfig) {
         border-radius: 8px;
         cursor: pointer;
         font-size: 12px;
+        background: #efe3bd;
+        color: #5c4a18;
       }
 
       .crop-list .screen-region-header {
@@ -1448,11 +1450,6 @@ function buildViewerHtml(viewerConfig) {
       .crop-list .screen-region-remove:hover,
       .crop-list .screen-region-remove:focus-visible {
         background: rgba(92, 74, 24, 0.16);
-      }
-
-      .crop-list .screen-region {
-        background: #efe3bd;
-        color: #5c4a18;
       }
 
       .crop-list .screen-region.selected {
