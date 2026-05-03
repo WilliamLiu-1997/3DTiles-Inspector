@@ -192,6 +192,18 @@ function buildViewerHtml(viewerConfig) {
         display: none;
         pointer-events: none;
         transform: translate(-50%, -50%);
+        transform-origin: center;
+      }
+
+      .screen-selection-edit-handle::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        display: block;
+        box-sizing: border-box;
+        transform-origin: center;
+        scale: 1;
+        transition: scale 80ms ease;
       }
 
       .screen-selection-rect.editable .screen-selection-edit-handle {
@@ -204,10 +216,23 @@ function buildViewerHtml(viewerConfig) {
       .screen-selection-edit-bottom-left {
         width: 10px;
         height: 10px;
+      }
+
+      .screen-selection-edit-top-left::before,
+      .screen-selection-edit-top-right::before,
+      .screen-selection-edit-bottom-right::before,
+      .screen-selection-edit-bottom-left::before {
         border: 2px solid #ffffff;
         border-radius: 50%;
         background: #ffcf33;
         box-shadow: 0 2px 8px rgba(120, 82, 0, 0.28);
+      }
+
+      .screen-selection-edit-top-left.active::before,
+      .screen-selection-edit-top-right.active::before,
+      .screen-selection-edit-bottom-right.active::before,
+      .screen-selection-edit-bottom-left.active::before {
+        scale: 1.5;
       }
 
       .screen-selection-edit-top,
@@ -216,9 +241,24 @@ function buildViewerHtml(viewerConfig) {
       .screen-selection-edit-left {
         width: 26px;
         height: 4px;
+      }
+
+      .screen-selection-edit-top::before,
+      .screen-selection-edit-right::before,
+      .screen-selection-edit-bottom::before,
+      .screen-selection-edit-left::before {
         border-radius: 999px;
         background: #ffffff;
         box-shadow: 0 1px 6px rgba(120, 82, 0, 0.24);
+      }
+
+      .screen-selection-edit-top.active::before,
+      .screen-selection-edit-right.active::before,
+      .screen-selection-edit-bottom.active::before,
+      .screen-selection-edit-left.active::before {
+        scale:
+          var(--screen-selection-edit-active-scale-x, 1.28)
+          var(--screen-selection-edit-active-scale-y, 1.5);
       }
 
       .toolbar-dock {

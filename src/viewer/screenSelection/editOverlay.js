@@ -1,9 +1,11 @@
 import { updateOverlayRect } from './geometry.js';
 
 export const SCREEN_EDIT_EDGE_HIT_SIZE = 8;
-export const SCREEN_EDIT_CORNER_HIT_SIZE = 12;
+export const SCREEN_EDIT_CORNER_HIT_SIZE = 16;
 const SCREEN_EDIT_EDGE_HANDLE_MAX_LENGTH = 26;
 const SCREEN_EDIT_EDGE_HANDLE_MIN_LENGTH = 6;
+const SCREEN_EDIT_EDGE_HANDLE_ACTIVE_SCALE_X = 1.5;
+const SCREEN_EDIT_EDGE_HANDLE_ACTIVE_SCALE_Y = 1.5;
 const SCREEN_EDIT_GRID_DIVISIONS = 8;
 const SCREEN_EDIT_MIN_CONVEX_CROSS_ABS = 1e-3;
 
@@ -246,6 +248,15 @@ export function pointSegmentDistanceSq(point, start, end) {
 }
 
 export function createScreenEditOverlay({ overlayEl, rectEl }) {
+  let activePart = null;
+
+  function applyActivePart() {
+    SCREEN_EDIT_HANDLE_PARTS.forEach((part) => {
+      const handle = rectEl?.querySelector(`[data-edit-part="${part}"]`);
+      handle?.classList.toggle('active', part === activePart);
+    });
+  }
+
   function render(clientPoints, { showGrid = false } = {}) {
     ensureEditableRectHandles(rectEl);
     rectEl?.classList.add('editable');
@@ -280,30 +291,58 @@ export function createScreenEditOverlay({ overlayEl, rectEl }) {
       const angle = getPartAngle(localPoints, part);
       const length = getPartLength(localPoints, part);
       if (length != null) {
-        handle.style.width = `${Math.max(
+        const maxVisualLength = Math.max(0, length - 2);
+        const visualLength = Math.max(
           0,
-          Math.min(SCREEN_EDIT_EDGE_HANDLE_MAX_LENGTH, length - 2),
-        )}px`;
+          Math.min(SCREEN_EDIT_EDGE_HANDLE_MAX_LENGTH, maxVisualLength),
+        );
+        const activeScaleX =
+          visualLength > 0
+            ? Math.min(
+                SCREEN_EDIT_EDGE_HANDLE_ACTIVE_SCALE_X,
+                Math.max(1, maxVisualLength / visualLength),
+              )
+            : 1;
+        handle.style.width = `${visualLength}px`;
         handle.style.height = `${
           length <= SCREEN_EDIT_EDGE_HANDLE_MIN_LENGTH ? 2 : 4
         }px`;
+        handle.style.setProperty(
+          '--screen-selection-edit-active-scale-x',
+          String(activeScaleX),
+        );
+        handle.style.setProperty(
+          '--screen-selection-edit-active-scale-y',
+          String(SCREEN_EDIT_EDGE_HANDLE_ACTIVE_SCALE_Y),
+        );
       } else {
         handle.style.width = '';
         handle.style.height = '';
+        handle.style.removeProperty('--screen-selection-edit-active-scale-x');
+        handle.style.removeProperty('--screen-selection-edit-active-scale-y');
       }
       handle.style.transform =
         angle == null
           ? 'translate(-50%, -50%)'
           : `translate(-50%, -50%) rotate(${angle}rad)`;
     });
+    applyActivePart();
   }
 
   function clear() {
+    activePart = null;
     rectEl?.classList.remove('drawing', 'editable');
+    applyActivePart();
+  }
+
+  function setActivePart(part) {
+    activePart = SCREEN_EDIT_HANDLE_PARTS.includes(part) ? part : null;
+    applyActivePart();
   }
 
   return {
     clear,
     render,
+    setActivePart,
   };
 }

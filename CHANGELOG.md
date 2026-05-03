@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-05-04
+
 ### Changed
 
 - Changed Crop Regions to use a `Draw Region` flow with editable convex quadrilateral regions, point/edge handles before camera movement, and a denser drawing grid preview.

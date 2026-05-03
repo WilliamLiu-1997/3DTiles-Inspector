@@ -443,6 +443,7 @@ export function createCropController({
       updated: false,
     };
     domElement.setPointerCapture?.(event.pointerId);
+    screenEditOverlay.setActivePart(hit.part);
     setEditCursor('grabbing');
     event.preventDefault();
     event.stopPropagation();
@@ -468,6 +469,7 @@ export function createCropController({
     }
 
     const hit = getPendingEditHit(event);
+    screenEditOverlay.setActivePart(hit?.part);
     setEditCursor(hit?.cursor || '');
     return false;
   }
@@ -480,7 +482,9 @@ export function createCropController({
     domElement.releasePointerCapture?.(event.pointerId);
     const updated = pendingEditDrag.updated;
     pendingEditDrag = null;
-    setEditCursor(getPendingEditHit(event)?.cursor || '');
+    const hit = getPendingEditHit(event);
+    screenEditOverlay.setActivePart(hit?.part);
+    setEditCursor(hit?.cursor || '');
     setStatus(
       updated
         ? 'Updated screen selection convex quadrilateral.'
@@ -499,6 +503,7 @@ export function createCropController({
 
     domElement.releasePointerCapture?.(event.pointerId);
     pendingEditDrag = null;
+    screenEditOverlay.setActivePart(null);
     clearEditCursor();
     event.preventDefault();
     event.stopPropagation();
