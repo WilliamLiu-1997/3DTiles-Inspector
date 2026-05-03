@@ -1,5 +1,5 @@
 import { Raycaster, Sphere, Vector2, Vector3 } from 'three';
-import { mouseToCoords, setRaycasterFromCamera } from './utils.js';
+import { mouseToCoords, setRaycasterFromCamera } from '../utils.js';
 
 export function createFlyToController({
   camera,

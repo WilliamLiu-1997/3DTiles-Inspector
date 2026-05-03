@@ -15,11 +15,11 @@ import { createViewerScene } from './scene/sceneSetup.js';
 import { createViewerTransformControls } from './scene/transformControls.js';
 import { bindViewerEvents } from './dom/events.js';
 import { createViewerShutdownRequester } from './io/shutdown.js';
-import { createCropController } from './cropController.js';
-import { createSetPositionController } from './setPositionController.js';
-import { createFlyToController } from './flyTo.js';
-import { createTransformModeController } from './transformModeController.js';
-import { createRootTransformController } from './rootTransformController.js';
+import { createSetPositionController } from './io/setPositionController.js';
+import { createFlyToController } from './navigation/flyTo.js';
+import { createCropController } from './screenSelection/cropController.js';
+import { createRootTransformController } from './transform/rootTransformController.js';
+import { createTransformModeController } from './transform/transformModeController.js';
 import {
   DEFAULT_ERROR_TARGET,
   createInspectorTilesRenderer,

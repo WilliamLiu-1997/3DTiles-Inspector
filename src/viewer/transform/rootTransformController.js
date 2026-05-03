@@ -10,7 +10,7 @@ import {
   resetEditableObjectTransform,
   setSavedRootMatrixFromTransform,
   updateTilesRendererGroupMatrices,
-} from './transform/tilesetTransform.js';
+} from './tilesetTransform.js';
 
 export function createRootTransformController({
   editableGroup,

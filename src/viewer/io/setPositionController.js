@@ -1,4 +1,4 @@
-import { createSetPositionPointerTracker } from './io/setPositionPointerTracker.js';
+import { createSetPositionPointerTracker } from './setPositionPointerTracker.js';
 
 export function createSetPositionController({
   cameraController,

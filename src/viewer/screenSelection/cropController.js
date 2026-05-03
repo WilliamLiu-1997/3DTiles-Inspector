@@ -11,8 +11,8 @@ import {
   setScreenSelectionEditSelection,
   setScreenSelectionFarDepth,
   updateScreenSelectionWorldState,
-} from './screenSelection/index.js';
-import { updateCropControls } from './dom/cropUi.js';
+} from './index.js';
+import { updateCropControls } from '../dom/cropUi.js';
 
 export function createCropController({
   camera,

@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Changed
+
+- Refactored viewer controls into focused modules organized by crop selection, fly-to navigation, root transforms, set-position picking, transform modes, status/progress UI, and toolbar toggles.
+
 ## [0.1.8] - 2026-05-03
 
 ### Added
