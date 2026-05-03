@@ -204,19 +204,19 @@ function pushPlaneMatrixFromNormal(matrices, normal, point, insidePoint) {
 }
 
 export function normalizeFarPlaneAxes(normal, right, up) {
-  up.addScaledVector(normal, -up.dot(normal));
-  if (up.lengthSq() >= 1e-12) {
-    up.normalize();
-    right.crossVectors(up, normal).normalize();
+  right.addScaledVector(normal, -right.dot(normal));
+  if (right.lengthSq() >= 1e-12) {
+    right.normalize();
+    up.crossVectors(right, normal).normalize();
     return true;
   }
 
-  right.addScaledVector(normal, -right.dot(normal));
-  if (right.lengthSq() < 1e-12) {
+  up.addScaledVector(normal, -up.dot(normal));
+  if (up.lengthSq() < 1e-12) {
     return false;
   }
-  right.normalize();
-  up.crossVectors(normal, right).normalize();
+  up.normalize();
+  right.crossVectors(normal, up).normalize();
   return true;
 }
 

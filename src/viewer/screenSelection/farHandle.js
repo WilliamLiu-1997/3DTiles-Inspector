@@ -1,14 +1,15 @@
-import { Group, Matrix4 } from 'three';
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
-import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
-import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import {
+  BufferGeometry,
+  Float32BufferAttribute,
+  Group,
+  LineBasicMaterial,
+  LineSegments,
+  Matrix4,
+} from 'three';
 
 import {
-  SCREEN_SELECTION_FAR_HANDLE_AXIS_DIRECTION,
   SCREEN_SELECTION_FAR_HANDLE_COLOR,
   SCREEN_SELECTION_FAR_HANDLE_GRID_DIVISIONS,
-  SCREEN_SELECTION_FAR_HANDLE_GUIDE_LINE_WIDTH,
-  SCREEN_SELECTION_FAR_HANDLE_LINE_WIDTH,
   SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER,
   cameraPosition,
   farPlaneCenterOffset,
@@ -30,21 +31,18 @@ function pushFarHandleSegment(vertices, start, end) {
 }
 
 function getCurrentFarPlaneCorner(corner, ratio) {
-  return [
-    corner[0] * ratio * SCREEN_SELECTION_FAR_HANDLE_AXIS_DIRECTION,
-    corner[1] * ratio,
-    0,
-  ];
+  return [corner[0] * ratio, corner[1] * ratio, 0];
 }
 
 function getCurrentNearPlaneCorner(corner, selection) {
+  const guideDepth = Math.max(
+    0,
+    selection.depthRange.farDepth - selection.depthRange.nearDepth,
+  );
   return [
-    corner[0] * SCREEN_SELECTION_FAR_HANDLE_AXIS_DIRECTION,
+    corner[0],
     corner[1],
-    ((corner[2] || 0) +
-      selection.depthRange.maxFarDepth -
-      selection.depthRange.farDepth) *
-      SCREEN_SELECTION_FAR_HANDLE_AXIS_DIRECTION,
+    guideDepth,
   ];
 }
 
@@ -131,9 +129,14 @@ function createFarHandleGuidePositions(selection) {
 }
 
 function createFarHandleGeometry(positions) {
-  const geometry = new LineSegmentsGeometry();
-  geometry.setPositions(positions);
+  const geometry = new BufferGeometry();
+  updateFarHandleGeometryPositions(geometry, positions);
   return geometry;
+}
+
+function updateFarHandleGeometryPositions(geometry, positions) {
+  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+  geometry.computeBoundingSphere();
 }
 
 function createFarHandleGridGeometry(selection) {
@@ -145,7 +148,12 @@ function createFarHandleGuideGeometry(selection) {
 }
 
 function updateFarHandleGridGeometry(selection) {
-  selection.farHandleGridGeometry?.setPositions(
+  if (!selection.farHandleGridGeometry) {
+    return;
+  }
+
+  updateFarHandleGeometryPositions(
+    selection.farHandleGridGeometry,
     createFarHandleGridPositions(selection),
   );
 }
@@ -155,17 +163,17 @@ function updateFarHandleGuideGeometry(selection) {
     return;
   }
 
-  selection.farHandleGuideGeometry.setPositions(
+  updateFarHandleGeometryPositions(
+    selection.farHandleGuideGeometry,
     createFarHandleGuidePositions(selection),
   );
 }
 
-function createFarHandleLineMaterial({ depthTest, linewidth, opacity = 1 }) {
-  return new LineMaterial({
+function createFarHandleMaterial({ depthTest, opacity = 1 }) {
+  return new LineBasicMaterial({
     color: SCREEN_SELECTION_FAR_HANDLE_COLOR,
     depthTest,
     depthWrite: depthTest,
-    linewidth,
     opacity,
     transparent: opacity < 1,
   });
@@ -173,30 +181,26 @@ function createFarHandleLineMaterial({ depthTest, linewidth, opacity = 1 }) {
 
 export function createScreenSelectionFarHandle(selection) {
   const handle = new Group();
-  const solidMaterial = createFarHandleLineMaterial({
+  const solidMaterial = createFarHandleMaterial({
     depthTest: true,
-    linewidth: SCREEN_SELECTION_FAR_HANDLE_LINE_WIDTH,
   });
-  const overlayMaterial = createFarHandleLineMaterial({
+  const overlayMaterial = createFarHandleMaterial({
     depthTest: false,
-    linewidth: SCREEN_SELECTION_FAR_HANDLE_LINE_WIDTH,
     opacity: 0.35,
   });
-  const solidGuideMaterial = createFarHandleLineMaterial({
+  const solidGuideMaterial = createFarHandleMaterial({
     depthTest: true,
-    linewidth: SCREEN_SELECTION_FAR_HANDLE_GUIDE_LINE_WIDTH,
   });
-  const overlayGuideMaterial = createFarHandleLineMaterial({
+  const overlayGuideMaterial = createFarHandleMaterial({
     depthTest: false,
-    linewidth: SCREEN_SELECTION_FAR_HANDLE_GUIDE_LINE_WIDTH,
     opacity: 0.35,
   });
   const gridGeometry = createFarHandleGridGeometry(selection);
   const guideGeometry = createFarHandleGuideGeometry(selection);
-  const solidGrid = new LineSegments2(gridGeometry, solidMaterial);
-  const overlayGrid = new LineSegments2(gridGeometry, overlayMaterial);
-  const solidGuide = new LineSegments2(guideGeometry, solidGuideMaterial);
-  const overlayGuide = new LineSegments2(guideGeometry, overlayGuideMaterial);
+  const solidGrid = new LineSegments(gridGeometry, solidMaterial);
+  const overlayGrid = new LineSegments(gridGeometry, overlayMaterial);
+  const solidGuide = new LineSegments(guideGeometry, solidGuideMaterial);
+  const overlayGuide = new LineSegments(guideGeometry, overlayGuideMaterial);
 
   handle.name = `Screen Selection ${selection.id} Far`;
   handle.renderOrder = SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER;
@@ -292,8 +296,7 @@ export function updateScreenSelectionFarHandle(
   if (!normalizeFarPlaneAxes(selectionForward, farPlaneRight, farPlaneUp)) {
     return;
   }
-  farPlaneRight.multiplyScalar(SCREEN_SELECTION_FAR_HANDLE_AXIS_DIRECTION);
-  selectionForward.multiplyScalar(SCREEN_SELECTION_FAR_HANDLE_AXIS_DIRECTION);
+  selectionForward.multiplyScalar(-1);
 
   const matrix = new Matrix4().makeBasis(
     farPlaneRight,
