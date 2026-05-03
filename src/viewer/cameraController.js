@@ -409,6 +409,7 @@ class CameraController extends EventDispatcher {
   #pointerEnterEvent = createUninitializedCallback(
     'CameraController.#pointerEnterEvent',
   );
+  #pointerDownFilter;
   #zoomTimeout;
   constructor(renderer, scene, camera, options = {}) {
     super();
@@ -444,6 +445,10 @@ class CameraController extends EventDispatcher {
     this.#ellipsoidMaxRadius = 0;
     this.#lastTime = 0;
     this.#hit = null;
+    this.#pointerDownFilter =
+      typeof options.pointerDownFilter === 'function'
+        ? options.pointerDownFilter
+        : null;
     this.#zoomTimeout = null;
     this.init();
   }
@@ -512,6 +517,11 @@ class CameraController extends EventDispatcher {
     this.#ellipsoid = ellipsoid;
     const r = ellipsoid.radius;
     this.#ellipsoidMaxRadius = Math.max(r.x, r.y, r.z);
+  }
+  setPointerDownFilter(filter) {
+    this.#pointerDownFilter = typeof filter === 'function' ? filter : null;
+    this.#resetState();
+    this.#pointerTracker.reset();
   }
   init() {
     this.#domElement.style.touchAction = 'none';
@@ -740,6 +750,9 @@ class CameraController extends EventDispatcher {
   }
   #pointerDown = (e) => {
     if (!this.#enabled) {
+      return;
+    }
+    if (this.#pointerDownFilter && !this.#pointerDownFilter(e)) {
       return;
     }
     this.#pointerTracker.addPointer(e);

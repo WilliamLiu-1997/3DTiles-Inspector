@@ -13,7 +13,6 @@ import {
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { CameraController } from './cameraController.js';
-import { createCropBoxLineGeometry } from './cropBox.js';
 
 export function createViewerScene({
   basisTranscoderPath,
@@ -65,30 +64,25 @@ export function createViewerScene({
   const transformHandle = new Group();
   scene.add(transformHandle);
 
-  const cropGroup = new Group();
-  cropGroup.name = 'Crop Boxes';
-  scene.add(cropGroup);
-
-  const cropSplatEdit = new SplatEdit({
-    name: 'Crop Box Preview Hide',
-    rgbaBlendMode: SplatEditRgbaBlendMode.MULTIPLY,
+  const screenSelectionSplatEdit = new SplatEdit({
+    name: 'Screen Selection Preview',
+    rgbaBlendMode: SplatEditRgbaBlendMode.SET_RGB,
     sdfSmooth: 0,
     softEdge: 0,
+    invert: false,
   });
-  scene.add(cropSplatEdit);
+  scene.add(screenSelectionSplatEdit);
 
   return {
     camera,
     cameraController: new CameraController(renderer, contentGroup, camera),
-    cropBoxLineGeometry: createCropBoxLineGeometry(),
-    cropGroup,
-    cropSplatEdit,
     dracoLoader,
     editableGroup,
     globeGroup,
     ktx2Loader,
     renderer,
     scene,
+    screenSelectionSplatEdit,
     terrainLight,
     transformHandle,
   };

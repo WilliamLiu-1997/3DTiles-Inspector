@@ -4,9 +4,7 @@ export function bindViewerEvents({
   dracoLoader,
   elements,
   geometricError,
-  getActiveCropTransformMode,
   getActiveTransformMode,
-  getActiveTransformTarget,
   getGlobeTiles,
   getTerrainEnabled,
   getTiles,
@@ -17,13 +15,9 @@ export function bindViewerEvents({
 }) {
   const {
     boundingVolumeButton,
-    cropAddButton,
-    cropDeleteButton,
-    cropMoveButton,
-    cropRotateButton,
-    cropScaleButton,
-    cropSetPositionButton,
-    cropUndoButton,
+    cropScreenCancelButton,
+    cropScreenConfirmButton,
+    cropScreenSelectButton,
     geometricErrorLayerScaleInput,
     geometricErrorScaleInput,
     moveCameraToCoordinateButton,
@@ -56,43 +50,18 @@ export function bindViewerEvents({
         : 'Rotate mode disabled.',
     );
   });
-  cropAddButton.addEventListener('click', handlers.addCropBox);
-  cropMoveButton.addEventListener('click', () => {
-    handlers.cancelPositionPickModes();
-    handlers.toggleCropTransformMode('translate');
-    setStatus(
-      getActiveTransformTarget() === 'crop' &&
-        getActiveCropTransformMode() === 'translate'
-        ? 'Crop box move mode enabled.'
-        : 'Crop box move mode disabled.',
-    );
-  });
-  cropRotateButton.addEventListener('click', () => {
-    handlers.cancelPositionPickModes();
-    handlers.toggleCropTransformMode('rotate');
-    setStatus(
-      getActiveTransformTarget() === 'crop' &&
-        getActiveCropTransformMode() === 'rotate'
-        ? 'Crop box rotate mode enabled.'
-        : 'Crop box rotate mode disabled.',
-    );
-  });
-  cropScaleButton.addEventListener('click', () => {
-    handlers.cancelPositionPickModes();
-    handlers.toggleCropTransformMode('scale');
-    setStatus(
-      getActiveTransformTarget() === 'crop' &&
-        getActiveCropTransformMode() === 'scale'
-        ? 'Crop box scale mode enabled.'
-        : 'Crop box scale mode disabled.',
-    );
-  });
-  cropSetPositionButton.addEventListener(
+  cropScreenSelectButton.addEventListener(
     'click',
-    handlers.toggleCropSetPositionMode,
+    handlers.toggleCropScreenSelectionMode,
   );
-  cropDeleteButton.addEventListener('click', handlers.deleteSelectedCropBox);
-  cropUndoButton.addEventListener('click', handlers.undoCropBoxEdit);
+  cropScreenConfirmButton.addEventListener(
+    'click',
+    handlers.confirmCropScreenSelection,
+  );
+  cropScreenCancelButton.addEventListener(
+    'click',
+    handlers.cancelCropScreenSelection,
+  );
   toolbarToggleButton.addEventListener('click', handlers.toggleToolbarVisibility);
   terrainButton.addEventListener('click', () => {
     handlers.setTerrainEnabled(!getTerrainEnabled());
@@ -137,19 +106,39 @@ export function bindViewerEvents({
   saveButton.addEventListener('click', handlers.saveTransform);
   renderer.domElement.addEventListener(
     'pointerdown',
-    handlers.handleSetPositionPointerDown,
+    (event) => {
+      if (handlers.handleScreenSelectionPointerDown(event)) {
+        return;
+      }
+      handlers.handleSetPositionPointerDown(event);
+    },
   );
   renderer.domElement.addEventListener(
     'pointermove',
-    handlers.handleSetPositionPointerMove,
+    (event) => {
+      if (handlers.handleScreenSelectionPointerMove(event)) {
+        return;
+      }
+      handlers.handleSetPositionPointerMove(event);
+    },
   );
   renderer.domElement.addEventListener(
     'pointerup',
-    handlers.handleSetPositionPointerUp,
+    (event) => {
+      if (handlers.handleScreenSelectionPointerUp(event)) {
+        return;
+      }
+      handlers.handleSetPositionPointerUp(event);
+    },
   );
   renderer.domElement.addEventListener(
     'pointercancel',
-    handlers.handleSetPositionPointerCancel,
+    (event) => {
+      if (handlers.handleScreenSelectionPointerCancel(event)) {
+        return;
+      }
+      handlers.handleSetPositionPointerCancel(event);
+    },
   );
 
   window.addEventListener('resize', () => {

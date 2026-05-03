@@ -7,8 +7,8 @@ const { spawn } = require('child_process');
 const { InspectorError } = require('../errors');
 const { resolveAndValidateTilesetPath } = require('../tileset-path');
 const {
-  deleteSplatsInNormalizedBoxes,
-  normalizeSplatCropBoxes,
+  deleteSplatsInNormalizedSelections,
+  normalizeSplatScreenSelections,
 } = require('./splatCrop');
 
 const VIEWER_HTML_NAME = 'viewer.html';
@@ -503,9 +503,31 @@ async function saveViewerTransform(
   {
     geometricErrorLayerScale = 1,
     geometricErrorScale = 1,
-    splatCropBoxes = [],
+    onProgress = null,
+    splatScreenSelections = [],
   } = {},
 ) {
+  const emitProgress = (progress) => {
+    if (typeof onProgress !== 'function') {
+      return;
+    }
+
+    const percent = Number(progress.percent);
+    onProgress({
+      ...progress,
+      percent: Number.isFinite(percent)
+        ? Math.min(100, Math.max(0, percent))
+        : undefined,
+      type: 'progress',
+    });
+  };
+
+  emitProgress({
+    message: 'Preparing save...',
+    percent: 5,
+    phase: 'prepare',
+  });
+
   const normalizedEdit = normalizeMatrix4Array(editMatrix, 'transform');
   const normalizedGeometricErrorScale = normalizePositiveFinite(
     geometricErrorScale,
@@ -535,11 +557,29 @@ async function saveViewerTransform(
     ? normalizeMatrix4Array(tileset.root.transform, 'tileset.root.transform')
     : cloneIdentityMatrix4();
   const nextRoot = multiplyMatrix4(normalizedEdit, currentRoot);
-  const cropResult = await deleteSplatsInNormalizedBoxes(
+  const hasCrop = splatScreenSelections.length > 0;
+  const cropResult = await deleteSplatsInNormalizedSelections(
     tilesetPath,
     nextRoot,
-    splatCropBoxes,
+    splatScreenSelections,
+    {
+      onProgress: (progress) => {
+        const cropPercent = Number(progress.percent);
+        emitProgress({
+          ...progress,
+          percent: Number.isFinite(cropPercent)
+            ? 10 + cropPercent * 0.75
+            : undefined,
+        });
+      },
+    },
   );
+
+  emitProgress({
+    message: 'Updating tileset JSON...',
+    percent: hasCrop ? 88 : 55,
+    phase: 'tileset',
+  });
 
   updateTilesetJsonFile(tilesetPath, {
     geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
@@ -550,6 +590,11 @@ async function saveViewerTransform(
 
   const summaryPath = path.join(rootDir, 'build_summary.json');
   if (fs.existsSync(summaryPath)) {
+    emitProgress({
+      message: 'Updating build summary...',
+      percent: 94,
+      phase: 'summary',
+    });
     const summary = readJsonFile(summaryPath);
     const previousGeometricErrorScale =
       summary.viewer_geometric_error_scale == null
@@ -574,6 +619,12 @@ async function saveViewerTransform(
       previousGeometricErrorLayerScale * normalizedGeometricErrorLayerScale;
     writeJsonAtomic(summaryPath, summary);
   }
+
+  emitProgress({
+    message: 'Save complete.',
+    percent: 100,
+    phase: 'complete',
+  });
 
   return {
     transform: nextRoot,
@@ -628,6 +679,17 @@ function sendJson(res, statusCode, payload) {
   res.end(body);
 }
 
+function clientAcceptsNdjson(req) {
+  return String(req.headers.accept || '')
+    .toLowerCase()
+    .split(',')
+    .some((entry) => entry.trim().startsWith('application/x-ndjson'));
+}
+
+function sendJsonLine(res, payload) {
+  res.write(`${JSON.stringify(payload)}\n`);
+}
+
 function sendText(res, statusCode, message, headers = {}) {
   const body = `${message}\n`;
   res.writeHead(statusCode, {
@@ -668,6 +730,21 @@ function normalizeRequestTarget(rawTarget) {
   }
 
   return rawTarget;
+}
+
+function createSaveTransformResponsePayload(
+  saveResult,
+  normalizedGeometricErrorLayerScale,
+  normalizedGeometricErrorScale,
+) {
+  return {
+    ok: true,
+    transform: saveResult.transform,
+    geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
+    geometricErrorScale: normalizedGeometricErrorScale,
+    deletedSplats: saveResult.deletedSplats,
+    processedSplatResources: saveResult.processedSplatResources,
+  };
 }
 
 async function handleSaveTransformRequest(rootTilesetPath, req, res) {
@@ -737,16 +814,54 @@ async function handleSaveTransformRequest(rootTilesetPath, req, res) {
     return;
   }
 
-  let normalizedSplatCropBoxes;
+  let normalizedSplatScreenSelections;
   try {
-    normalizedSplatCropBoxes = normalizeSplatCropBoxes(payload.splatCropBoxes);
+    normalizedSplatScreenSelections = normalizeSplatScreenSelections(
+      payload.splatScreenSelections,
+    );
   } catch (err) {
     sendJson(res, 400, {
       error:
         err instanceof Error && err.message
           ? err.message
-          : 'splatCropBoxes must be an array of crop-box matrix objects.',
+          : 'splatScreenSelections must be an array of screen selection objects.',
     });
+    return;
+  }
+
+  if (clientAcceptsNdjson(req)) {
+    res.writeHead(200, {
+      'Cache-Control': 'no-store',
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'X-Content-Type-Options': 'nosniff',
+    });
+
+    try {
+      const saveResult = await saveViewerTransform(rootTilesetPath, normalizedEdit, {
+        geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
+        geometricErrorScale: normalizedGeometricErrorScale,
+        onProgress: (progress) => sendJsonLine(res, progress),
+        splatScreenSelections: normalizedSplatScreenSelections,
+      });
+      sendJsonLine(res, {
+        type: 'complete',
+        ...createSaveTransformResponsePayload(
+          saveResult,
+          normalizedGeometricErrorLayerScale,
+          normalizedGeometricErrorScale,
+        ),
+      });
+    } catch (err) {
+      sendJsonLine(res, {
+        error:
+          err instanceof Error && err.message
+            ? err.message
+            : 'Failed to save transform.',
+        type: 'error',
+      });
+    } finally {
+      res.end();
+    }
     return;
   }
 
@@ -755,7 +870,7 @@ async function handleSaveTransformRequest(rootTilesetPath, req, res) {
     saveResult = await saveViewerTransform(rootTilesetPath, normalizedEdit, {
       geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
       geometricErrorScale: normalizedGeometricErrorScale,
-      splatCropBoxes: normalizedSplatCropBoxes,
+      splatScreenSelections: normalizedSplatScreenSelections,
     });
   } catch (err) {
     sendJson(res, 500, {
@@ -767,14 +882,15 @@ async function handleSaveTransformRequest(rootTilesetPath, req, res) {
     return;
   }
 
-  sendJson(res, 200, {
-    ok: true,
-    transform: saveResult.transform,
-    geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
-    geometricErrorScale: normalizedGeometricErrorScale,
-    deletedSplats: saveResult.deletedSplats,
-    processedSplatResources: saveResult.processedSplatResources,
-  });
+  sendJson(
+    res,
+    200,
+    createSaveTransformResponsePayload(
+      saveResult,
+      normalizedGeometricErrorLayerScale,
+      normalizedGeometricErrorScale,
+    ),
+  );
 }
 
 async function handleViewerRequest(
@@ -1015,6 +1131,21 @@ function buildViewerHtml(viewerConfig) {
 
       canvas {
         display: block;
+      }
+
+      .screen-selection-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 9;
+        pointer-events: none;
+      }
+
+      .screen-selection-rect {
+        position: absolute;
+        border: 1px solid #ffcf33;
+        background: rgba(255, 207, 51, 0.14);
+        box-shadow:
+          0 8px 24px rgba(120, 82, 0, 0.12);
       }
 
       .toolbar-dock {
@@ -1280,12 +1411,58 @@ function buildViewerHtml(viewerConfig) {
         display: none;
       }
 
-      .crop-list button {
-        flex: 1 1 72px;
+      .crop-list .screen-region {
+        flex: 1 1 100%;
         min-width: 0;
-        padding-right: 10px;
-        padding-left: 10px;
+        display: grid;
+        gap: 6px;
+        padding: 8px 10px;
+        border: 1px solid rgba(22, 50, 79, 0.1);
+        border-radius: 8px;
+        cursor: pointer;
         font-size: 12px;
+      }
+
+      .crop-list .screen-region-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+      }
+
+      .crop-list .screen-region-remove {
+        min-width: 0;
+        height: 24px;
+        padding: 0 8px;
+        border: 0;
+        border-radius: 6px;
+        background: rgba(92, 74, 24, 0.08);
+        color: #6b5417;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      .crop-list .screen-region-remove:hover,
+      .crop-list .screen-region-remove:focus-visible {
+        background: rgba(92, 74, 24, 0.16);
+      }
+
+      .crop-list .screen-region {
+        background: #efe3bd;
+        color: #5c4a18;
+      }
+
+      .crop-list .screen-region.selected {
+        border-color: rgba(92, 74, 24, 0.42);
+        box-shadow: 0 0 0 2px rgba(255, 210, 77, 0.32);
+      }
+
+      .crop-list .screen-region:focus-visible {
+        outline: 2px solid rgba(255, 210, 77, 0.7);
+        outline-offset: 2px;
       }
 
       .status {
@@ -1297,6 +1474,29 @@ function buildViewerHtml(viewerConfig) {
 
       .status.error {
         color: #a33f2f;
+      }
+
+      .save-progress {
+        width: 100%;
+        height: 6px;
+        overflow: hidden;
+        border: 0;
+        border-radius: 999px;
+        background: rgba(22, 50, 79, 0.12);
+      }
+
+      .save-progress::-webkit-progress-bar {
+        background: rgba(22, 50, 79, 0.12);
+      }
+
+      .save-progress::-webkit-progress-value {
+        border-radius: 999px;
+        background: #19765b;
+      }
+
+      .save-progress::-moz-progress-bar {
+        border-radius: 999px;
+        background: #19765b;
       }
 
       .status-panel {
@@ -1365,6 +1565,9 @@ function buildViewerHtml(viewerConfig) {
   </head>
   <body>
     <div id="app"></div>
+    <div id="screen-selection-overlay" class="screen-selection-overlay" hidden>
+      <div id="screen-selection-rect" class="screen-selection-rect"></div>
+    </div>
     <div class="runtime-stats" aria-live="polite">
       <div class="runtime-stat">
         <p class="runtime-stat-label">CacheBytes</p>
@@ -1425,26 +1628,6 @@ function buildViewerHtml(viewerConfig) {
             <button id="set-position" class="full-span" type="button">Set Position</button>
           </div>
         </div>
-        <div id="crop-section" class="toolbar-section" hidden>
-          <div class="toolbar-section-header">
-            <p class="toolbar-section-title">Crop Boxes</p>
-            <p id="crop-count-value" class="toolbar-value">0</p>
-          </div>
-          <div class="coordinate-actions">
-            <button id="crop-add" class="wide" type="button">Add Box</button>
-          </div>
-          <div class="transform-actions">
-            <button id="crop-move" type="button">Move</button>
-            <button id="crop-rotate" type="button">Rotate</button>
-            <button id="crop-scale" type="button">Scale</button>
-            <button id="crop-set-position" type="button">Set Position</button>
-          </div>
-          <div id="crop-list" class="crop-list"></div>
-          <div class="status-actions">
-            <button id="crop-delete" type="button">Delete</button>
-            <button id="crop-undo" type="button">Undo</button>
-          </div>
-        </div>
         <div class="toolbar-section">
           <div class="toolbar-section-header">
             <p class="toolbar-section-title">Coordinate</p>
@@ -1492,11 +1675,26 @@ function buildViewerHtml(viewerConfig) {
             />
           </label>
         </div>
+        <div id="crop-section" class="toolbar-section" hidden>
+          <div class="toolbar-section-header">
+            <p class="toolbar-section-title">Crop Regions</p>
+            <p id="crop-count-value" class="toolbar-value">0</p>
+          </div>
+          <div class="coordinate-actions">
+            <button id="crop-screen-select" class="wide" type="button">Screen Select</button>
+          </div>
+          <div id="crop-list" class="crop-list"></div>
+          <div class="status-actions">
+            <button id="crop-screen-confirm" type="button">Confirm</button>
+            <button id="crop-screen-cancel" type="button">Cancel</button>
+          </div>
+        </div>
         <div class="toolbar-section status-panel">
           <div class="status-actions">
             <button id="reset" type="button">Reset</button>
             <button id="save" class="save" type="button">Save</button>
           </div>
+          <progress id="save-progress" class="save-progress" max="100" value="0" hidden></progress>
           <div id="status" class="status">Loading tileset...</div>
         </div>
       </div>

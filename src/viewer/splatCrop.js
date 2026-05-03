@@ -8,7 +8,8 @@ const GLB_MAGIC = 0x46546c67;
 const GLB_VERSION = 2;
 const GLB_JSON_CHUNK_TYPE = 0x4e4f534a;
 const GLB_BIN_CHUNK_TYPE = 0x004e4942;
-const MAX_CROP_BOXES = 256;
+const MAX_SCREEN_SELECTIONS = 256;
+const SCREEN_SELECTION_ACTION_EXCLUDE = 'exclude';
 const SPLAT_CROP_WORKER_COUNT = 4;
 const SPLAT_CROP_WORKER_PATH = path.join(__dirname, 'splatCropWorker.js');
 const IDENTITY_MATRIX4 = Object.freeze([
@@ -41,30 +42,101 @@ function normalizeMatrix4Array(value, name = 'matrix') {
   });
 }
 
-function normalizeSplatCropBoxes(value) {
+function normalizeFiniteNumber(value, name) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    throw new InspectorError(`${name} must be a finite number.`);
+  }
+  return number;
+}
+
+function normalizeScreenSelectionRect(value, name) {
+  if (!value || typeof value !== 'object') {
+    throw new InspectorError(`${name} must be an object.`);
+  }
+
+  const rect = {
+    maxX: normalizeFiniteNumber(value.maxX, `${name}.maxX`),
+    maxY: normalizeFiniteNumber(value.maxY, `${name}.maxY`),
+    minX: normalizeFiniteNumber(value.minX, `${name}.minX`),
+    minY: normalizeFiniteNumber(value.minY, `${name}.minY`),
+  };
+
+  if (
+    rect.minX < -1 ||
+    rect.maxX > 1 ||
+    rect.minY < -1 ||
+    rect.maxY > 1
+  ) {
+    throw new InspectorError(`${name} values must be inside NDC range [-1, 1].`);
+  }
+  if (rect.minX > rect.maxX || rect.minY > rect.maxY) {
+    throw new InspectorError(`${name} min values must be <= max values.`);
+  }
+
+  return rect;
+}
+
+function normalizeScreenSelectionAction(value, name) {
+  if (value == null) {
+    return SCREEN_SELECTION_ACTION_EXCLUDE;
+  }
+  if (value !== SCREEN_SELECTION_ACTION_EXCLUDE) {
+    throw new InspectorError(`${name} must be "exclude".`);
+  }
+  return value;
+}
+
+function normalizeScreenSelectionPlaneMatrices(value, name) {
+  if (value == null) {
+    return null;
+  }
+  if (!Array.isArray(value) || value.length !== 6) {
+    throw new InspectorError(`${name} must be an array of 6 plane matrices.`);
+  }
+  return value.map((matrix, index) =>
+    normalizeMatrix4Array(matrix, `${name}[${index}]`),
+  );
+}
+
+function normalizeSplatScreenSelections(value) {
   if (value == null) {
     return [];
   }
 
   if (!Array.isArray(value)) {
-    throw new InspectorError('splatCropBoxes must be an array.');
+    throw new InspectorError('splatScreenSelections must be an array.');
   }
 
-  if (value.length > MAX_CROP_BOXES) {
+  if (value.length > MAX_SCREEN_SELECTIONS) {
     throw new InspectorError(
-      `splatCropBoxes cannot contain more than ${MAX_CROP_BOXES} boxes.`,
+      `splatScreenSelections cannot contain more than ${MAX_SCREEN_SELECTIONS} selections.`,
     );
   }
 
   return value.map((entry, index) => {
     if (!entry || typeof entry !== 'object') {
-      throw new InspectorError(`splatCropBoxes[${index}] must be an object.`);
+      throw new InspectorError(
+        `splatScreenSelections[${index}] must be an object.`,
+      );
     }
 
     return {
-      matrix: normalizeMatrix4Array(
-        entry.matrix,
-        `splatCropBoxes[${index}].matrix`,
+      action: normalizeScreenSelectionAction(
+        entry.action,
+        `splatScreenSelections[${index}].action`,
+      ),
+      rect: normalizeScreenSelectionRect(
+        entry.rect,
+        `splatScreenSelections[${index}].rect`,
+      ),
+      planeMatrices: normalizeScreenSelectionPlaneMatrices(
+        entry.planeMatrices,
+        `splatScreenSelections[${index}].planeMatrices`,
+      ),
+      viewProjectionMatrix: normalizeMatrix4Array(
+        entry.viewProjectionMatrix,
+        `splatScreenSelections[${index}].viewProjectionMatrix`,
       ),
     };
   });
@@ -884,10 +956,6 @@ function getBufferViewSlice(resource, bufferViewIndex) {
   };
 }
 
-function serializeCropBoxMatrices(cropBoxMatrices) {
-  return cropBoxMatrices.map((matrix) => matrix.toArray());
-}
-
 function serializeRewriteDescriptors(descriptors) {
   return descriptors.map((descriptor) => ({
     sourceToWorldMatrix: descriptor.sourceToWorldMatrix.toArray(),
@@ -896,16 +964,16 @@ function serializeRewriteDescriptors(descriptors) {
 
 function rewriteSpzBytesInWorker({
   bytes,
-  cropBoxMatrices,
   descriptors,
+  screenSelections,
   workerPool,
 }) {
   const workerBytes = Uint8Array.from(bytes);
   return workerPool.run(
     {
       bytes: workerBytes,
-      cropBoxMatrices,
       descriptors: serializeRewriteDescriptors(descriptors),
+      screenSelections,
     },
     [workerBytes.buffer],
   );
@@ -918,12 +986,103 @@ function runWithResourceLock(resourceLocks, resourcePath, task) {
   return next;
 }
 
+function collectCandidateSplatResources({
+  resourcePaths = new Set(),
+  rootDir,
+  tileset = null,
+  tilesetPath,
+  visitedTilesets = new Set(),
+}) {
+  const resolvedTilesetPath = assertPathInsideRoot(
+    tilesetPath,
+    rootDir,
+    'Nested tileset path',
+  );
+  if (visitedTilesets.has(resolvedTilesetPath)) {
+    return resourcePaths;
+  }
+  visitedTilesets.add(resolvedTilesetPath);
+
+  const tilesetJson = tileset || readTilesetJson(resolvedTilesetPath);
+  const tilesetDir = path.dirname(resolvedTilesetPath);
+  const visitTile = (tile) => {
+    getContentSlots(tile).forEach((slot) => {
+      const uri = getContentUri(slot.content);
+      if (typeof uri !== 'string' || uri.length === 0) {
+        return;
+      }
+      if (isRemoteOrProtocolUri(uri)) {
+        throw new InspectorError(
+          `Remote content is not supported for crop save: ${uri}`,
+        );
+      }
+
+      const extension = path.extname(stripUriSuffix(uri)).toLowerCase();
+      if (extension === '.json') {
+        collectCandidateSplatResources({
+          resourcePaths,
+          rootDir,
+          tilesetPath: resolveLocalUri(
+            tilesetDir,
+            rootDir,
+            uri,
+            'Nested tileset content URI',
+          ),
+          visitedTilesets,
+        });
+        return;
+      }
+      if (extension === '.gltf' || extension === '.glb') {
+        resourcePaths.add(
+          resolveLocalUri(tilesetDir, rootDir, uri, 'Splat content URI'),
+        );
+      }
+    });
+
+    if (Array.isArray(tile?.children)) {
+      tile.children.forEach(visitTile);
+    }
+  };
+
+  visitTile(tilesetJson.root);
+  return resourcePaths;
+}
+
+function markSplatResourceProgress(context, resourcePath) {
+  if (
+    !context.progress ||
+    typeof context.progress.onProgress !== 'function' ||
+    context.progressedResources.has(resourcePath)
+  ) {
+    return;
+  }
+
+  context.progressedResources.add(resourcePath);
+  context.progress.completedResources += 1;
+  const totalResources = context.progress.totalResources;
+  const percent =
+    totalResources > 0
+      ? (context.progress.completedResources / totalResources) * 100
+      : 100;
+
+  context.progress.onProgress({
+    completedResources: context.progress.completedResources,
+    message:
+      totalResources > 0
+        ? `Deleting cropped splats (${context.progress.completedResources}/${totalResources} resources)...`
+        : 'Deleting cropped splats...',
+    percent,
+    phase: 'crop',
+    totalResources,
+  });
+}
+
 async function processGltfResource({
   THREE,
   filePath,
   rootDir,
   tileSceneMatrix,
-  cropBoxMatrices,
+  screenSelections,
   workerPool,
 }) {
   const resource = loadGltfResource(filePath, rootDir);
@@ -961,8 +1120,8 @@ async function processGltfResource({
       viewDescriptors,
       promise: rewriteSpzBytesInWorker({
         bytes: slice.bytes,
-        cropBoxMatrices,
         descriptors: viewDescriptors,
+        screenSelections,
         workerPool,
       }),
     });
@@ -1051,11 +1210,13 @@ function withProcessedResourceCount(context, resourcePath, result) {
 async function processLockedSplatResource(context, resourcePath, tileSceneMatrix) {
   const cachedEmptyResource = context.emptySplatResources.get(resourcePath);
   if (cachedEmptyResource) {
-    return withProcessedResourceCount(context, resourcePath, {
+    const result = withProcessedResourceCount(context, resourcePath, {
       deletedSplats: 0,
       empty: true,
       processed: cachedEmptyResource.processed,
     });
+    markSplatResourceProgress(context, resourcePath);
+    return result;
   }
 
   const result = await processGltfResource({
@@ -1063,7 +1224,7 @@ async function processLockedSplatResource(context, resourcePath, tileSceneMatrix
     filePath: resourcePath,
     rootDir: context.rootDir,
     tileSceneMatrix,
-    cropBoxMatrices: context.cropBoxMatrices,
+    screenSelections: context.screenSelections,
     workerPool: context.workerPool,
   });
   if (result.empty) {
@@ -1071,7 +1232,9 @@ async function processLockedSplatResource(context, resourcePath, tileSceneMatrix
       processed: result.processed,
     });
   }
-  return withProcessedResourceCount(context, resourcePath, result);
+  const countedResult = withProcessedResourceCount(context, resourcePath, result);
+  markSplatResourceProgress(context, resourcePath);
+  return countedResult;
 }
 
 async function processGltfContentSlot(context, slot, uri, tileTransform) {
@@ -1113,11 +1276,13 @@ async function processNestedTilesetContentSlot(
     rootDir: context.rootDir,
     upRotationMatrix: context.upRotationMatrix,
     rootTransform: null,
-    cropBoxMatrices: context.cropBoxMatrices,
+    screenSelections: context.screenSelections,
     parentTransform: tileTransform,
     visitedTilesets: context.visitedTilesets,
     processedResources: context.processedResources,
     emptySplatResources: context.emptySplatResources,
+    progress: context.progress,
+    progressedResources: context.progressedResources,
     resourceLocks: context.resourceLocks,
     workerPool: context.workerPool,
   });
@@ -1213,11 +1378,13 @@ async function traverseTileset({
   rootDir,
   upRotationMatrix,
   rootTransform,
-  cropBoxMatrices,
+  screenSelections,
   parentTransform,
   visitedTilesets,
   processedResources,
   emptySplatResources,
+  progress,
+  progressedResources,
   resourceLocks,
   workerPool,
 }) {
@@ -1242,14 +1409,16 @@ async function traverseTileset({
 
   const context = {
     THREE,
-    cropBoxMatrices,
     deletedSplats: 0,
     emptySplatResources,
+    progress,
+    progressedResources,
     processedResources,
     processedSplatResources: 0,
     resourceLocks,
     rootDir,
     rootTransform,
+    screenSelections,
     tilesetDir: path.dirname(resolvedTilesetPath),
     tilesetModified: false,
     upRotationMatrix,
@@ -1273,12 +1442,13 @@ async function traverseTileset({
   };
 }
 
-async function deleteSplatsInNormalizedBoxes(
+async function deleteSplatsInNormalizedSelections(
   rootTilesetPath,
   rootTransform,
-  normalizedBoxes,
+  normalizedScreenSelections = [],
+  { onProgress = null } = {},
 ) {
-  if (normalizedBoxes.length === 0) {
+  if (normalizedScreenSelections.length === 0) {
     return {
       deletedSplats: 0,
       processedSplatResources: 0,
@@ -1291,17 +1461,32 @@ async function deleteSplatsInNormalizedBoxes(
 
   const { THREE } = await getSplatCropModules();
   const rootTileset = readTilesetJson(tilesetPath);
+  const totalResources = collectCandidateSplatResources({
+    rootDir,
+    tileset: rootTileset,
+    tilesetPath,
+  }).size;
+  if (typeof onProgress === 'function') {
+    onProgress({
+      completedResources: 0,
+      message:
+        totalResources > 0
+          ? `Deleting cropped splats (0/${totalResources} resources)...`
+          : 'Deleting cropped splats...',
+      percent: totalResources > 0 ? 0 : 100,
+      phase: 'crop',
+      totalResources,
+    });
+  }
   const upRotationMatrix = getRootUpRotationMatrix(THREE, rootTileset);
-  const cropBoxMatrices = normalizedBoxes.map((box, index) => {
-    const matrix = new THREE.Matrix4().fromArray(box.matrix);
-    if (Math.abs(matrix.determinant()) <= 1e-12) {
-      throw new InspectorError(
-        `splatCropBoxes[${index}].matrix must be invertible.`,
-      );
-    }
-    return matrix;
-  });
-  const cropBoxMatrixArrays = serializeCropBoxMatrices(cropBoxMatrices);
+  const screenSelections = normalizedScreenSelections.map((selection) => ({
+    action: selection.action,
+    planeMatrices: selection.planeMatrices
+      ? selection.planeMatrices.map((matrix) => matrix.slice())
+      : null,
+    rect: { ...selection.rect },
+    viewProjectionMatrix: selection.viewProjectionMatrix.slice(),
+  }));
   const workerPool = new SplatCropWorkerPool(SPLAT_CROP_WORKER_COUNT);
 
   try {
@@ -1315,11 +1500,17 @@ async function deleteSplatsInNormalizedBoxes(
         rootTransform == null
           ? IDENTITY_MATRIX4
           : normalizeMatrix4Array(rootTransform, 'rootTransform'),
-      cropBoxMatrices: cropBoxMatrixArrays,
+      screenSelections,
       parentTransform: null,
       visitedTilesets: new Set(),
       processedResources: new Set(),
       emptySplatResources: new Map(),
+      progress: {
+        completedResources: 0,
+        onProgress,
+        totalResources,
+      },
+      progressedResources: new Set(),
       resourceLocks: new Map(),
       workerPool,
     });
@@ -1328,16 +1519,7 @@ async function deleteSplatsInNormalizedBoxes(
   }
 }
 
-function deleteSplatsInBoxes(rootTilesetPath, rootTransform, splatCropBoxes) {
-  return deleteSplatsInNormalizedBoxes(
-    rootTilesetPath,
-    rootTransform,
-    normalizeSplatCropBoxes(splatCropBoxes),
-  );
-}
-
 module.exports = {
-  deleteSplatsInBoxes,
-  deleteSplatsInNormalizedBoxes,
-  normalizeSplatCropBoxes,
+  deleteSplatsInNormalizedSelections,
+  normalizeSplatScreenSelections,
 };

@@ -1,16 +1,6 @@
-import { Matrix4, Quaternion, Raycaster, Sphere, Vector2, Vector3 } from 'three';
+import { Matrix4, Raycaster, Sphere, Vector2, Vector3 } from 'three';
 import { isGaussianSplatScene } from '3d-tiles-rendererjs-3dgs-plugin';
 import {
-  CROP_BOX_DEFAULT_HALF_SIZE,
-  DEFAULT_CROP_TRANSFORM_MODE,
-  createCropBox as createCropBoxObject,
-  disposeCropBox,
-  normalizeCropBoxTransform,
-  setCropBoxSelectedStyle,
-  syncCropBoxSdf,
-} from './cropBox.js';
-import {
-  clamp,
   forceOpaqueScene,
   mouseToCoords,
   normalizeLocalResourceUrl,
@@ -37,12 +27,25 @@ import { createRuntimeStats } from './runtimeStats.js';
 import { createGeoCameraController } from './geoCamera.js';
 import { createGeometricErrorController } from './geometricError.js';
 import { createGlobeController } from './globeController.js';
-import { updateCropBoxControls } from './cropBoxUi.js';
+import { updateCropControls } from './cropUi.js';
 import { createViewerScene } from './sceneSetup.js';
 import { createViewerTransformControls } from './transformControls.js';
 import { bindViewerEvents } from './viewerEvents.js';
 import { createViewerShutdownRequester } from './viewerShutdown.js';
 import { createSetPositionPointerTracker } from './setPositionPointerTracker.js';
+import {
+  createScreenSelection,
+  createScreenSelectionEdit,
+  createScreenSelectionFarHandle,
+  createScreenSelectionPointerTracker,
+  disposeScreenSelection,
+  getScreenSelectionFarDepthFromPosition,
+  getScreenSelectionPayload,
+  SCREEN_SELECTION_ACTION_EXCLUDE,
+  setScreenSelectionFarDepth,
+  setScreenSelectionEditSelection,
+  updateScreenSelectionWorldState,
+} from './screenSelection.js';
 import {
   DEFAULT_ERROR_TARGET,
   createInspectorTilesRenderer,
@@ -77,6 +80,9 @@ const {
   longitudeInput,
   rotateButton,
   saveButton,
+  saveProgressEl,
+  screenSelectionOverlayEl,
+  screenSelectionRectEl,
   setPositionButton,
   splatsCountStatEl,
   splatsCountValueEl,
@@ -97,6 +103,37 @@ function setStatus(message, isError = false) {
   statusEl.classList.toggle('error', !!isError);
 }
 
+function setSaveProgress(percent) {
+  if (!saveProgressEl) {
+    return;
+  }
+
+  if (percent == null) {
+    saveProgressEl.hidden = true;
+    saveProgressEl.value = 0;
+    return;
+  }
+
+  saveProgressEl.hidden = false;
+  saveProgressEl.value = Math.min(100, Math.max(0, percent));
+}
+
+function handleSaveProgress(progress) {
+  const percent = Number(progress?.percent);
+  const hasPercent = Number.isFinite(percent);
+  if (hasPercent) {
+    setSaveProgress(percent);
+  }
+
+  if (typeof progress?.message === 'string' && progress.message.length > 0) {
+    setStatus(
+      hasPercent
+        ? `${progress.message} ${Math.round(Math.min(100, Math.max(0, percent)))}%`
+        : progress.message,
+    );
+  }
+}
+
 const requestViewerShutdown = createViewerShutdownRequester(SHUTDOWN_URL);
 
 function parseCoordinateInputs() {
@@ -109,26 +146,20 @@ function parseCoordinateInputs() {
 }
 
 function updateModeButtons(mode) {
-  const rootActive = activeTransformTarget === 'tiles';
-  translateButton.classList.toggle(
-    'active',
-    rootActive && mode === 'translate',
-  );
-  rotateButton.classList.toggle('active', rootActive && mode === 'rotate');
+  translateButton.classList.toggle('active', mode === 'translate');
+  rotateButton.classList.toggle('active', mode === 'rotate');
 }
 
 const {
   camera,
   cameraController,
-  cropBoxLineGeometry,
-  cropGroup,
-  cropSplatEdit,
   dracoLoader,
   editableGroup,
   globeGroup,
   ktx2Loader,
   renderer,
   scene,
+  screenSelectionSplatEdit,
   terrainLight,
   transformHandle,
 } = createViewerScene({
@@ -144,6 +175,9 @@ const globeController = createGlobeController({
   },
   renderer,
 });
+cameraController.setPointerDownFilter((event) => {
+  return !(pendingCropScreenSelectionMode && event.button === 0);
+});
 
 const { transformControls, transformControlsHelper } =
   createViewerTransformControls({
@@ -153,30 +187,13 @@ const { transformControls, transformControlsHelper } =
     scene,
     transformHandle,
     callbacks: {
-      createCropSnapshot,
-      onCropObjectChange: () => {
-        const selectedBox = getSelectedCropBox();
-        if (selectedBox) {
-          normalizeCropBoxTransform(selectedBox);
-          syncCropBoxSdf(selectedBox);
-          updateCropBoxVisualState();
-        }
-      },
+      onObjectChange: handleTransformControlObjectChange,
       onRootObjectChange: (matrix) => {
         applyEditableGroupMatrixFromRootTransform(matrix);
         syncCoordinateInputsFromTilesTransform();
       },
-      pushCropUndoSnapshot,
-      snapshotsEqual: (snapshot) =>
-        snapshotsEqual(snapshot, createCropSnapshot()),
     },
-    getActiveTransformTarget: () => activeTransformTarget,
-    getCropTransformSnapshot: () => cropTransformSnapshot,
-    getSelectedCropBox,
     getSyncingTransformHandle: () => syncingTransformHandle,
-    setCropTransformSnapshot: (snapshot) => {
-      cropTransformSnapshot = snapshot;
-    },
   });
 
 const sphere = new Sphere();
@@ -185,8 +202,7 @@ const coordinateTransformMatrix = new Matrix4();
 const coordinateEditMatrix = new Matrix4();
 const currentRootTransformMatrix = new Matrix4();
 const savedRootInverseMatrix = new Matrix4();
-const cropSetPositionWorldPosition = new Vector3();
-const cropSetPositionLocalPosition = new Vector3();
+const screenSelectionCameraForward = new Vector3();
 const pointerCoords = new Vector2();
 const pickRaycaster = new Raycaster();
 const pickTargets = [];
@@ -198,19 +214,16 @@ const savedRootMatrix = new Matrix4();
 let savedRootMatrixPromise = Promise.resolve();
 let savedRootMatrixLoadError = null;
 let pendingSetPosition = false;
-let pendingCropSetPosition = false;
 let syncingTransformHandle = false;
 let tilesTransformDirty = false;
 let showBoundingVolume = false;
 let debugTilesPlugin = null;
 let tilesetHasGaussianSplats = false;
-let activeTransformTarget = null;
-let activeCropTransformMode = null;
-let cropBoxes = [];
-let selectedCropBoxId = null;
-let nextCropBoxId = 1;
-let cropUndoStack = [];
-let cropTransformSnapshot = null;
+let cropScreenSelections = [];
+let pendingCropScreenSelections = [];
+let nextCropScreenSelectionId = 1;
+let activeCropScreenSelectionId = null;
+let pendingCropScreenSelectionMode = false;
 const runtimeStats = createRuntimeStats({
   cacheBytesValueEl,
   getScene: () => scene,
@@ -248,10 +261,17 @@ const setPositionPointerTracker = createSetPositionPointerTracker({
   onApply: async (target, event) => {
     if (target === 'tiles') {
       await applyTilesSetPositionFromPointerEvent(event);
-    } else if (target === 'crop') {
-      applyCropSetPositionFromPointerEvent(event);
     }
   },
+});
+
+const screenSelectionPointerTracker = createScreenSelectionPointerTracker({
+  camera,
+  domElement: renderer.domElement,
+  getDepthRange: getScreenSelectionDepthRange,
+  onSelectionCreated: handleScreenSelectionCreated,
+  overlayEl: screenSelectionOverlayEl,
+  rectEl: screenSelectionRectEl,
 });
 
 function updateRuntimeStats(force = false) {
@@ -270,7 +290,7 @@ function setGaussianSplatUiVisible(visible) {
 function resetGaussianSplatTilesetState() {
   tilesetHasGaussianSplats = false;
   setGaussianSplatUiVisible(false);
-  clearCropBoxes();
+  clearCropSelections();
   updateRuntimeStats(true);
 }
 
@@ -341,36 +361,49 @@ function setTerrainEnabled(enabled) {
   syncTerrainButton();
 }
 
+function getActiveCropScreenSelection() {
+  if (activeCropScreenSelectionId == null) {
+    return null;
+  }
+  return findCropScreenSelection(activeCropScreenSelectionId)?.selection || null;
+}
+
+function setTransformControlAxes(showX, showY, showZ) {
+  transformControls.showX = showX;
+  transformControls.showY = showY;
+  transformControls.showZ = showZ;
+}
+
 function syncTransformControlsState() {
-  const selectedBox = getSelectedCropBox();
-  const pendingPositionPick = pendingSetPosition || pendingCropSetPosition;
-  const cropControlsVisible =
-    activeTransformTarget === 'crop' &&
-    activeCropTransformMode !== null &&
-    selectedBox !== null &&
-    !pendingPositionPick;
+  const pendingPositionPick =
+    pendingSetPosition || pendingCropScreenSelectionMode;
+  const activeCropScreenSelection = getActiveCropScreenSelection();
+  const farControlsVisible =
+    !!activeCropScreenSelection?.farHandle && !pendingPositionPick;
   const rootControlsVisible =
-    activeTransformTarget === 'tiles' &&
     activeTransformMode !== null &&
+    !farControlsVisible &&
     !pendingPositionPick;
 
-  if (cropControlsVisible) {
-    if (transformControls.object !== selectedBox.root) {
-      transformControls.attach(selectedBox.root);
+  if (farControlsVisible) {
+    if (transformControls.object !== activeCropScreenSelection.farHandle) {
+      transformControls.attach(activeCropScreenSelection.farHandle);
     }
-    transformControls.setMode(activeCropTransformMode);
+    transformControls.setMode('translate');
     transformControls.setSpace('local');
+    setTransformControlAxes(false, false, true);
   } else if (rootControlsVisible) {
     if (transformControls.object !== transformHandle) {
       transformControls.attach(transformHandle);
     }
     transformControls.setMode(activeTransformMode);
     transformControls.setSpace('local');
+    setTransformControlAxes(true, true, true);
   } else if (transformControls.object) {
     transformControls.detach();
   }
 
-  const controlsVisible = cropControlsVisible || rootControlsVisible;
+  const controlsVisible = farControlsVisible || rootControlsVisible;
   transformControls.enabled = controlsVisible;
   if (transformControlsHelper) {
     transformControlsHelper.visible = controlsVisible;
@@ -380,11 +413,10 @@ function syncTransformControlsState() {
 
 function setTransformMode(mode) {
   activeTransformMode = mode;
-  if (mode !== null) {
-    clearCropSelection({ sync: false });
-    activeTransformTarget = 'tiles';
-  } else if (activeTransformTarget === 'tiles') {
-    activeTransformTarget = null;
+  if (mode !== null && activeCropScreenSelectionId != null) {
+    activeCropScreenSelectionId = null;
+    syncScreenSelectionEditSdfs();
+    syncScreenSelectionFarHandles();
   }
   if (mode !== null) {
     transformControls.setMode(mode);
@@ -431,6 +463,7 @@ function invalidateTilesetTransforms() {
   editableGroup.updateMatrixWorld(true);
   updateTilesRendererGroupMatrices(tiles);
   refreshLoadedTileSceneMatrices(tiles);
+  syncScreenSelectionsToTilesTransform();
   transformControlsHelper?.updateMatrixWorld(true);
 }
 
@@ -543,283 +576,365 @@ function raycastPickWorldPosition(target) {
   return true;
 }
 
-function getSelectedCropBox() {
-  return cropBoxes.find((box) => box.id === selectedCropBoxId) || null;
+function getCurrentRootTransformArray() {
+  return getCurrentRootTransform(currentRootTransformMatrix).toArray();
 }
 
-function syncCropEditSdfs() {
-  cropSplatEdit.sdfs = null;
-  cropSplatEdit.clear();
-  cropBoxes.forEach((box) => {
-    cropSplatEdit.add(box.sdf);
+function syncScreenSelectionsToTilesTransform() {
+  const transform = getCurrentRootTransformArray();
+  getCropScreenSelectionEntries().forEach(({ selection }) => {
+    updateScreenSelectionWorldState(
+      selection,
+      transform,
+      selection.id === activeCropScreenSelectionId,
+    );
   });
 }
 
-function updateCropBoxVisualState() {
-  cropBoxes.forEach((box) => {
-    setCropBoxSelectedStyle(box, box.id === selectedCropBoxId);
-  });
-}
-
-function createCropSnapshot() {
-  cropBoxes.forEach((box) => {
-    box.root.updateMatrix();
-  });
-  return {
-    activeCropTransformMode,
-    boxes: cropBoxes.map((box) => ({
-      id: box.id,
-      matrix: box.root.matrix.toArray(),
+function syncScreenSelectionEditSdfs() {
+  syncScreenSelectionsToTilesTransform();
+  setScreenSelectionEditSelection(screenSelectionSplatEdit, null, false);
+  const selections = [
+    ...cropScreenSelections.map((selection) => ({
+      style:
+        selection.id === activeCropScreenSelectionId ? 'preview' : 'exclude',
+      selection,
     })),
-    nextCropBoxId,
-    selectedCropBoxId,
-  };
-}
-
-function cloneCropSnapshot(snapshot) {
-  return {
-    activeCropTransformMode: snapshot.activeCropTransformMode,
-    boxes: snapshot.boxes.map((box) => ({
-      id: box.id,
-      matrix: box.matrix.slice(),
+    ...pendingCropScreenSelections.map((selection) => ({
+      style: 'preview',
+      selection,
     })),
-    nextCropBoxId: snapshot.nextCropBoxId,
-    selectedCropBoxId: snapshot.selectedCropBoxId,
-  };
-}
+  ];
 
-function snapshotsEqual(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function pushCropUndoSnapshot(snapshot = createCropSnapshot()) {
-  cropUndoStack.push(cloneCropSnapshot(snapshot));
-  if (cropUndoStack.length > 50) {
-    cropUndoStack.shift();
-  }
-  updateCropButtons();
-}
-
-function createCropBox({ id, matrix }) {
-  const box = createCropBoxObject({
-    id,
-    lineGeometry: cropBoxLineGeometry,
-    matrix,
-  });
-  cropGroup.add(box.root);
-  cropBoxes.push(box);
-  syncCropEditSdfs();
-  return box;
-}
-
-function restoreCropSnapshot(snapshot) {
-  cropBoxes.forEach(disposeCropBox);
-  cropBoxes = [];
-  nextCropBoxId = snapshot.nextCropBoxId;
-  selectedCropBoxId = snapshot.selectedCropBoxId;
-  activeCropTransformMode = snapshot.activeCropTransformMode;
-
-  snapshot.boxes.forEach((box) => {
-    createCropBox(box);
-  });
-
-  if (!getSelectedCropBox()) {
-    selectedCropBoxId = null;
-    activeCropTransformMode = null;
-    if (activeTransformTarget === 'crop') {
-      activeTransformTarget = null;
+  selections.forEach(({ style, selection }) => {
+    if (!selection.edit) {
+      selection.edit = createScreenSelectionEdit({
+        style,
+        name: `Screen Selection ${selection.id}`,
+      });
+      scene.add(selection.edit);
     }
-  } else if (activeCropTransformMode) {
-    activeTransformTarget = 'crop';
-    activeTransformMode = null;
-  } else if (activeTransformTarget === 'crop') {
-    activeTransformTarget = null;
-  }
-
-  syncCropEditSdfs();
-  updateModeButtons(activeTransformMode);
-  updateCropBoxVisualState();
-  updateCropButtons();
-  syncTransformControlsState();
+    selection.edit.ordering =
+      style === 'preview' ? 1000000 + selection.id : selection.id;
+    setScreenSelectionEditSelection(selection.edit, selection, style);
+  });
 }
 
-function clearCropBoxes({ resetUndo = true } = {}) {
-  cancelCropSetPositionMode();
-  cropBoxes.forEach(disposeCropBox);
-  cropBoxes = [];
-  selectedCropBoxId = null;
-  activeCropTransformMode = null;
-  if (activeTransformTarget === 'crop') {
-    activeTransformTarget = null;
+function getCropScreenSelectionEntries() {
+  return [
+    ...cropScreenSelections.map((selection) => ({
+      style: 'exclude',
+      selection,
+    })),
+    ...pendingCropScreenSelections.map((selection) => ({
+      style: 'preview',
+      selection,
+    })),
+  ];
+}
+
+function syncScreenSelectionFarHandles() {
+  const entries = getCropScreenSelectionEntries();
+  if (
+    activeCropScreenSelectionId != null &&
+    !entries.some(({ selection }) => selection.id === activeCropScreenSelectionId)
+  ) {
+    activeCropScreenSelectionId = null;
   }
-  if (resetUndo) {
-    cropUndoStack = [];
-  }
-  cropTransformSnapshot = null;
-  syncCropEditSdfs();
+
+  entries.forEach(({ selection }) => {
+    if (!selection.farHandle) {
+      scene.add(createScreenSelectionFarHandle(selection));
+    }
+  });
+  syncScreenSelectionsToTilesTransform();
+}
+
+function clearCropSelections() {
+  cancelCropScreenSelectionMode();
+  cropScreenSelections.forEach(disposeScreenSelection);
+  pendingCropScreenSelections.forEach(disposeScreenSelection);
+  cropScreenSelections = [];
+  pendingCropScreenSelections = [];
+  activeCropScreenSelectionId = null;
+  syncScreenSelectionEditSdfs();
+  syncScreenSelectionFarHandles();
   updateCropButtons();
   syncTransformControlsState();
 }
 
 function updateCropButtons() {
-  updateCropBoxControls({
-    activeCropTransformMode,
-    activeTransformTarget,
-    cropBoxes,
+  updateCropControls({
+    activeScreenSelectionId: activeCropScreenSelectionId,
     elements: viewerElements,
-    onBoxButtonClick: (box, index) => {
-      if (box.id === selectedCropBoxId) {
-        clearCropSelection();
-        setStatus(`Deselected crop box ${index + 1}.`);
-        return;
-      }
-      selectCropBox(box.id);
-      if (!activeCropTransformMode) {
-        setCropTransformMode(DEFAULT_CROP_TRANSFORM_MODE);
-      }
-      setStatus(`Selected crop box ${index + 1}.`);
-    },
-    pendingCropSetPosition,
-    selectedCropBoxId,
+    pendingScreenSelectionCount: pendingCropScreenSelections.length,
+    pendingScreenSelectionMode: pendingCropScreenSelectionMode,
+    screenSelections: cropScreenSelections,
+    pendingScreenSelections: pendingCropScreenSelections,
+    onScreenSelectionRemove: handleScreenSelectionRemove,
+    onScreenSelectionSelect: handleScreenSelectionSelect,
     tilesetHasGaussianSplats,
-    undoDepth: cropUndoStack.length,
   });
 }
 
-function setCropTransformMode(mode) {
-  activeCropTransformMode = mode;
-  if (mode !== null) {
-    activeTransformTarget = 'crop';
-    activeTransformMode = null;
-    transformControls.setMode(mode);
-    transformControls.setSpace('local');
-  } else if (activeTransformTarget === 'crop') {
-    activeTransformTarget = null;
+function getScreenSelectionDepthRange() {
+  if (!getTilesetWorldBoundingSphere()) {
+    return {
+      far: camera.near + 100,
+      near: camera.near,
+    };
   }
+
+  camera.getWorldDirection(screenSelectionCameraForward);
+  const centerDepth = sphere.center
+    .clone()
+    .sub(camera.position)
+    .dot(screenSelectionCameraForward);
+  const sphereFarthestDistance =
+    camera.position.distanceTo(sphere.center) + sphere.radius;
+  const near = Math.max(camera.near, centerDepth - sphere.radius);
+  return {
+    far: sphereFarthestDistance,
+    near,
+  };
+}
+
+function setCropScreenSelectionMode(active) {
+  pendingCropScreenSelectionMode =
+    active &&
+    tilesetHasGaussianSplats &&
+    pendingCropScreenSelections.length === 0;
+  screenSelectionPointerTracker.setActive(pendingCropScreenSelectionMode);
+  if (pendingCropScreenSelectionMode) {
+    activeCropScreenSelectionId = null;
+    pendingSetPosition = false;
+    setPositionPointerTracker.clear();
+    setTransformMode(null);
+    syncScreenSelectionEditSdfs();
+    syncScreenSelectionFarHandles();
+  }
+  cameraController.enabled = !transformControls.dragging;
+  syncTransformControlsState();
   updateModeButtons(activeTransformMode);
   updateCropButtons();
-  syncTransformControlsState();
 }
 
-function toggleCropTransformMode(mode) {
-  setCropTransformMode(
-    activeTransformTarget === 'crop' && activeCropTransformMode === mode
-      ? null
-      : mode,
-  );
-}
-
-function clearCropSelection({ sync = true } = {}) {
-  selectedCropBoxId = null;
-  activeCropTransformMode = null;
-  pendingCropSetPosition = false;
-  setPositionPointerTracker.clear();
-  if (activeTransformTarget === 'crop') {
-    activeTransformTarget = null;
-  }
-  updateCropBoxVisualState();
-  if (sync) {
-    updateModeButtons(activeTransformMode);
-    updateCropButtons();
-    syncTransformControlsState();
-  }
-}
-
-function selectCropBox(id) {
-  selectedCropBoxId = cropBoxes.some((box) => box.id === id) ? id : null;
-  if (!selectedCropBoxId) {
-    clearCropSelection();
+function cancelCropScreenSelectionMode() {
+  if (!pendingCropScreenSelectionMode) {
     return;
   }
-  updateCropBoxVisualState();
-  updateCropButtons();
-  syncTransformControlsState();
+
+  setCropScreenSelectionMode(false);
 }
 
-function getDefaultCropBoxQuaternion(position, target) {
-  return geoCamera.getLocalFrameQuaternion(position, target);
-}
-
-function createDefaultCropBoxMatrix(target) {
-  const position = new Vector3();
-  const quaternion = new Quaternion();
-  let halfSize = CROP_BOX_DEFAULT_HALF_SIZE;
-
-  pointerCoords.set(0, 0);
-  setRaycasterFromCamera(pickRaycaster, pointerCoords, camera);
-  if (raycastPickWorldPosition(position)) {
-    if (getTilesetWorldBoundingSphere()) {
-      halfSize = clamp(sphere.radius * 0.05, 0.5, Math.max(0.5, sphere.radius));
-    }
-  } else if (getTilesetWorldBoundingSphere()) {
-    position.copy(sphere.center);
-    halfSize = clamp(sphere.radius * 0.1, 0.5, Math.max(0.5, sphere.radius));
-  } else {
-    camera.getWorldDirection(position);
-    position.multiplyScalar(100).add(camera.position);
-  }
-
-  return target.compose(
-    position,
-    getDefaultCropBoxQuaternion(position, quaternion),
-    new Vector3(halfSize, halfSize, halfSize),
-  );
-}
-
-function addCropBox() {
-  if (!tilesetHasGaussianSplats) {
+function handleScreenSelectionCreated(selectionData) {
+  if (pendingCropScreenSelections.length > 0) {
+    setCropScreenSelectionMode(false);
     setStatus(
-      'Crop boxes are available for 3D Gaussian Splat tilesets only.',
+      'Confirm or Cancel the current screen selection before drawing another.',
       true,
     );
     return;
   }
 
-  cancelPositionPickModes();
-  pushCropUndoSnapshot();
-  const id = nextCropBoxId++;
-  createCropBox({
-    id,
-    matrix: createDefaultCropBoxMatrix(new Matrix4()).toArray(),
-  });
-  selectCropBox(id);
-  setCropTransformMode(DEFAULT_CROP_TRANSFORM_MODE);
-  setStatus('Added a crop box. Scale, move, or rotate it before saving.');
-}
-
-function deleteSelectedCropBox() {
-  const selectedBox = getSelectedCropBox();
-  if (!selectedBox) {
+  if (!selectionData) {
+    setStatus('Screen selection was too small.', true);
     return;
   }
 
-  cancelCropSetPositionMode();
-  pushCropUndoSnapshot();
-  cropBoxes = cropBoxes.filter((box) => box !== selectedBox);
-  disposeCropBox(selectedBox);
-  syncCropEditSdfs();
-  const nextSelection = cropBoxes[cropBoxes.length - 1] || null;
-  selectCropBox(nextSelection ? nextSelection.id : null);
-  setStatus('Deleted the selected crop box.');
+  const selection = createScreenSelection({
+    action: SCREEN_SELECTION_ACTION_EXCLUDE,
+    id: nextCropScreenSelectionId++,
+    transformMatrix: getCurrentRootTransformArray(),
+    ...selectionData,
+  });
+  pendingCropScreenSelections.push(selection);
+  activeCropScreenSelectionId = selection.id;
+  setCropScreenSelectionMode(false);
+  syncScreenSelectionEditSdfs();
+  syncScreenSelectionFarHandles();
+  syncTransformControlsState();
+  updateCropButtons();
+  setStatus(
+    'Added screen exclude selection. Drag the 3D far plane, then Confirm or Cancel before drawing another.',
+  );
 }
 
-function undoCropBoxEdit() {
-  const snapshot = cropUndoStack.pop();
-  if (!snapshot) {
+function toggleCropScreenSelectionMode() {
+  if (!tilesetHasGaussianSplats) {
+    setStatus(
+      'Screen selection is available for 3D Gaussian Splat tilesets only.',
+      true,
+    );
     return;
   }
-  cancelCropSetPositionMode();
-  restoreCropSnapshot(snapshot);
-  setStatus('Undid the latest crop-box edit.');
+
+  if (pendingCropScreenSelectionMode) {
+    setCropScreenSelectionMode(false);
+    setStatus('Screen selection paused.');
+    return;
+  }
+
+  if (pendingCropScreenSelections.length > 0) {
+    setStatus(
+      'Confirm or Cancel the current screen selection before drawing another.',
+      true,
+    );
+    return;
+  }
+
+  setCropScreenSelectionMode(true);
+  setStatus('Drag one screen exclude rectangle.');
 }
 
-function getSplatCropBoxesPayload() {
-  return cropBoxes.map((box) => {
-    box.root.updateMatrixWorld(true);
-    return {
-      matrix: box.root.matrixWorld.toArray(),
-    };
-  });
+function confirmCropScreenSelection() {
+  if (pendingCropScreenSelections.length === 0) {
+    return;
+  }
+
+  const selectionCount = pendingCropScreenSelections.length;
+  cropScreenSelections.push(...pendingCropScreenSelections);
+  pendingCropScreenSelections = [];
+  activeCropScreenSelectionId = null;
+  setCropScreenSelectionMode(false);
+  syncScreenSelectionEditSdfs();
+  syncScreenSelectionFarHandles();
+  syncTransformControlsState();
+  updateCropButtons();
+  setStatus(
+    `Confirmed ${selectionCount} screen selection${selectionCount === 1 ? '' : 's'}. Click its row to adjust the 3D far plane, or Save to apply.`,
+  );
+}
+
+function cancelCropScreenSelection() {
+  const hadMode = pendingCropScreenSelectionMode;
+  const hadSelection = pendingCropScreenSelections.length > 0;
+  cancelCropScreenSelectionMode();
+  if (
+    pendingCropScreenSelections.some(
+      (selection) => selection.id === activeCropScreenSelectionId,
+    )
+  ) {
+    activeCropScreenSelectionId = null;
+  }
+  pendingCropScreenSelections.forEach(disposeScreenSelection);
+  pendingCropScreenSelections = [];
+  syncScreenSelectionEditSdfs();
+  syncScreenSelectionFarHandles();
+  updateCropButtons();
+  syncTransformControlsState();
+  if (hadMode || hadSelection) {
+    setStatus('Screen selection cancelled.');
+  }
+}
+
+function findCropScreenSelection(selectionId) {
+  const id = Number(selectionId);
+  let selection = cropScreenSelections.find((entry) => entry.id === id);
+  if (selection) {
+    return { confirmed: true, selection };
+  }
+
+  selection = pendingCropScreenSelections.find((entry) => entry.id === id);
+  return selection ? { confirmed: false, selection } : null;
+}
+
+function updateCropScreenSelectionFarDepth(selectionId, farDepth, commit) {
+  const match = findCropScreenSelection(selectionId);
+  if (!match) {
+    return;
+  }
+
+  setScreenSelectionFarDepth(
+    match.selection,
+    farDepth,
+    getCurrentRootTransformArray(),
+  );
+  syncScreenSelectionEditSdfs();
+  syncScreenSelectionFarHandles();
+
+  if (commit) {
+    updateCropButtons();
+    setStatus('Updated screen selection far plane.');
+  }
+}
+
+function handleTransformControlObjectChange(object) {
+  if (!object?.userData?.screenSelectionFarHandle) {
+    return false;
+  }
+
+  const match = findCropScreenSelection(object.userData.screenSelectionId);
+  if (!match) {
+    return true;
+  }
+
+  updateCropScreenSelectionFarDepth(
+    match.selection.id,
+    getScreenSelectionFarDepthFromPosition(
+      match.selection,
+      object.position,
+      getCurrentRootTransformArray(),
+    ),
+    false,
+  );
+  updateCropButtons();
+  return true;
+}
+
+function handleScreenSelectionSelect(selectionId) {
+  const match = findCropScreenSelection(selectionId);
+  if (!match) {
+    return;
+  }
+
+  const wasActive = activeCropScreenSelectionId === match.selection.id;
+  activeCropScreenSelectionId = wasActive ? null : match.selection.id;
+  setTransformMode(null);
+  syncScreenSelectionEditSdfs();
+  syncScreenSelectionFarHandles();
+  updateCropButtons();
+  syncTransformControlsState();
+  setStatus(
+    wasActive
+      ? 'Screen selection deactivated.'
+      : 'Drag the 3D far plane handle to adjust screen selection depth.',
+  );
+}
+
+function removeScreenSelectionFromList(list, selectionId) {
+  const id = Number(selectionId);
+  const index = list.findIndex((selection) => selection.id === id);
+  if (index === -1) {
+    return false;
+  }
+
+  const [selection] = list.splice(index, 1);
+  disposeScreenSelection(selection);
+  return true;
+}
+
+function handleScreenSelectionRemove(selectionId) {
+  const removed =
+    removeScreenSelectionFromList(cropScreenSelections, selectionId) ||
+    removeScreenSelectionFromList(pendingCropScreenSelections, selectionId);
+  if (!removed) {
+    return;
+  }
+
+  if (Number(selectionId) === activeCropScreenSelectionId) {
+    activeCropScreenSelectionId = null;
+  }
+  syncScreenSelectionEditSdfs();
+  syncScreenSelectionFarHandles();
+  updateCropButtons();
+  syncTransformControlsState();
+  setStatus('Removed screen selection.');
+}
+
+function getSplatScreenSelectionsPayload() {
+  syncScreenSelectionsToTilesTransform();
+  return cropScreenSelections.map(getScreenSelectionPayload);
 }
 
 function syncPositionPickModeState() {
@@ -833,10 +948,11 @@ function setSetPositionMode(active) {
   pendingSetPosition = active;
   setPositionPointerTracker.clear();
   if (active) {
-    pendingCropSetPosition = false;
+    activeCropScreenSelectionId = null;
+    syncScreenSelectionEditSdfs();
+    syncScreenSelectionFarHandles();
+    cancelCropScreenSelectionMode();
     setTransformMode(null);
-    setCropTransformMode(null);
-    clearCropSelection({ sync: false });
   }
   syncPositionPickModeState();
 }
@@ -849,29 +965,9 @@ function cancelSetPositionMode() {
   setSetPositionMode(false);
 }
 
-function setCropSetPositionMode(active) {
-  const hasSelectedBox = getSelectedCropBox() !== null;
-  pendingCropSetPosition = active && hasSelectedBox;
-  setPositionPointerTracker.clear();
-  if (pendingCropSetPosition) {
-    pendingSetPosition = false;
-    setTransformMode(null);
-    setCropTransformMode(null);
-  }
-  syncPositionPickModeState();
-}
-
-function cancelCropSetPositionMode() {
-  if (!pendingCropSetPosition) {
-    return;
-  }
-
-  setCropSetPositionMode(false);
-}
-
 function cancelPositionPickModes() {
   cancelSetPositionMode();
-  cancelCropSetPositionMode();
+  cancelCropScreenSelectionMode();
 }
 
 async function applyTilesPlacementFromCoordinate(latitude, longitude, height) {
@@ -924,43 +1020,6 @@ function pickCoordinateFromPointerEvent(event) {
   return geoCamera.getCartographicFromWorldPosition(coordinateWorldPosition);
 }
 
-function setSelectedCropBoxPositionFromPointerEvent(event) {
-  const selectedBox = getSelectedCropBox();
-  if (!selectedBox) {
-    return false;
-  }
-
-  if (
-    !pickWorldPositionFromPointerEvent(event, cropSetPositionWorldPosition)
-  ) {
-    setStatus(
-      'No globe, terrain, or tiles hit under cursor. Click the globe, terrain, or tiles to place the crop box.',
-      true,
-    );
-    return false;
-  }
-
-  const snapshot = createCropSnapshot();
-  cropSetPositionLocalPosition.copy(cropSetPositionWorldPosition);
-  if (selectedBox.root.parent) {
-    selectedBox.root.parent.updateMatrixWorld(true);
-    selectedBox.root.parent.worldToLocal(cropSetPositionLocalPosition);
-  }
-  selectedBox.root.position.copy(cropSetPositionLocalPosition);
-  selectedBox.root.updateMatrix();
-  selectedBox.root.updateMatrixWorld(true);
-  normalizeCropBoxTransform(selectedBox);
-  syncCropBoxSdf(selectedBox);
-  updateCropBoxVisualState();
-  syncTransformControlsState();
-
-  if (!snapshotsEqual(snapshot, createCropSnapshot())) {
-    pushCropUndoSnapshot(snapshot);
-  }
-
-  return true;
-}
-
 async function applyTilesSetPositionFromPointerEvent(event) {
   const coordinate = pickCoordinateFromPointerEvent(event);
   if (!coordinate) {
@@ -992,22 +1051,9 @@ async function applyTilesSetPositionFromPointerEvent(event) {
   }
 }
 
-function applyCropSetPositionFromPointerEvent(event) {
-  if (!setSelectedCropBoxPositionFromPointerEvent(event)) {
-    return;
-  }
-
-  setCropSetPositionMode(false);
-  setCropTransformMode(DEFAULT_CROP_TRANSFORM_MODE);
-  setStatus('Moved selected crop box to the clicked position.');
-}
-
 function getActiveSetPositionTarget() {
   if (pendingSetPosition) {
     return 'tiles';
-  }
-  if (pendingCropSetPosition) {
-    return 'crop';
   }
   return null;
 }
@@ -1052,32 +1098,6 @@ function toggleSetPositionMode() {
   setSetPositionMode(true);
   setStatus(
     'Click the globe, terrain, or tiles without dragging to place the tileset root.',
-  );
-}
-
-function toggleCropSetPositionMode() {
-  if (!tilesetHasGaussianSplats) {
-    setStatus(
-      'Crop box Set Position is available for 3D Gaussian Splat tilesets only.',
-      true,
-    );
-    return;
-  }
-
-  if (pendingCropSetPosition) {
-    setCropSetPositionMode(false);
-    setStatus('Crop box Set Position cancelled.');
-    return;
-  }
-
-  if (!getSelectedCropBox()) {
-    setStatus('Select a crop box before setting its position.', true);
-    return;
-  }
-
-  setCropSetPositionMode(true);
-  setStatus(
-    'Click the globe, terrain, or tiles without dragging to place the selected crop box.',
   );
 }
 
@@ -1222,10 +1242,17 @@ function loadTileset(url) {
 
 async function saveTransform() {
   cancelPositionPickModes();
+  if (pendingCropScreenSelections.length > 0) {
+    setStatus('Confirm or cancel pending screen selections before saving.', true);
+    return;
+  }
+
   saveButton.disabled = true;
-  const splatCropBoxes = getSplatCropBoxesPayload();
+  setSaveProgress(0);
+  const splatScreenSelections = getSplatScreenSelectionsPayload();
+  const cropRegionCount = splatScreenSelections.length;
   setStatus(
-    splatCropBoxes.length > 0
+    cropRegionCount > 0
       ? 'Saving transform and deleting cropped splats...'
       : 'Saving transform...',
   );
@@ -1240,9 +1267,10 @@ async function saveTransform() {
   try {
     const payload = await postSaveTransform({
       incrementalMatrix,
+      onProgress: handleSaveProgress,
       saveState,
       saveUrl: SAVE_URL,
-      splatCropBoxes,
+      splatScreenSelections,
     });
     if (payload && payload.transform != null) {
       setSavedRootMatrixFromTransform({
@@ -1275,12 +1303,12 @@ async function saveTransform() {
     geometricError.resetPendingScales();
     syncTransformHandleFromTilesTransform();
     syncCoordinateInputsFromTilesTransform();
-    if (splatCropBoxes.length > 0) {
+    if (cropRegionCount > 0) {
       const deletedSplats = Number(payload.deletedSplats || 0);
       const processedSplatResources = Number(
         payload.processedSplatResources || 0,
       );
-      clearCropBoxes();
+      clearCropSelections();
       loadTileset(TILESET_URL);
       setStatus(
         `Saved transform and deleted ${deletedSplats} cropped splats from ${processedSplatResources} splat resource${processedSplatResources === 1 ? '' : 's'}. Reloading tileset.`,
@@ -1297,6 +1325,7 @@ async function saveTransform() {
   } catch (err) {
     setStatus(err && err.message ? err.message : String(err), true);
   } finally {
+    setSaveProgress(null);
     saveButton.disabled = false;
   }
 }
@@ -1307,16 +1336,22 @@ bindViewerEvents({
   dracoLoader,
   elements: viewerElements,
   geometricError,
-  getActiveCropTransformMode: () => activeCropTransformMode,
   getActiveTransformMode: () => activeTransformMode,
-  getActiveTransformTarget: () => activeTransformTarget,
   getGlobeTiles: () => globeController.getTiles(),
   getTerrainEnabled: () => globeController.isTerrainEnabled(),
   getTiles: () => tiles,
   handlers: {
-    addCropBox,
+    cancelCropScreenSelection,
     cancelPositionPickModes,
-    deleteSelectedCropBox,
+    confirmCropScreenSelection,
+    handleScreenSelectionPointerCancel:
+      screenSelectionPointerTracker.handlePointerCancel,
+    handleScreenSelectionPointerDown:
+      screenSelectionPointerTracker.handlePointerDown,
+    handleScreenSelectionPointerMove:
+      screenSelectionPointerTracker.handlePointerMove,
+    handleScreenSelectionPointerUp:
+      screenSelectionPointerTracker.handlePointerUp,
     handleSetPositionPointerCancel:
       setPositionPointerTracker.handlePointerCancel,
     handleSetPositionPointerDown: setPositionPointerTracker.handlePointerDown,
@@ -1330,12 +1365,10 @@ bindViewerEvents({
     saveTransform,
     setTerrainEnabled,
     toggleBoundingVolume,
-    toggleCropSetPositionMode,
-    toggleCropTransformMode,
+    toggleCropScreenSelectionMode,
     toggleToolbarVisibility,
     toggleTransformMode,
     toggleSetPositionMode,
-    undoCropBoxEdit,
   },
   ktx2Loader,
   renderer,

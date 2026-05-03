@@ -1,5 +1,30 @@
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
+const TRANSFORM_CONTROL_RENDER_ORDER = 1000002;
+
+function forceOverlayMaterial(material) {
+  if (!material) {
+    return;
+  }
+
+  if (Array.isArray(material)) {
+    material.forEach(forceOverlayMaterial);
+    return;
+  }
+
+  material.depthTest = false;
+  material.depthWrite = false;
+  material.needsUpdate = true;
+}
+
+function forceOverlayRendering(object) {
+  object.renderOrder = TRANSFORM_CONTROL_RENDER_ORDER;
+  object.traverse((entry) => {
+    entry.renderOrder = TRANSFORM_CONTROL_RENDER_ORDER;
+    forceOverlayMaterial(entry.material);
+  });
+}
+
 export function createViewerTransformControls({
   camera,
   cameraController,
@@ -7,11 +32,7 @@ export function createViewerTransformControls({
   scene,
   transformHandle,
   callbacks,
-  getActiveTransformTarget,
-  getCropTransformSnapshot,
-  getSelectedCropBox,
   getSyncingTransformHandle,
-  setCropTransformSnapshot,
 }) {
   const transformControls = new TransformControls(camera, domElement);
   const transformControlsHelper =
@@ -19,6 +40,9 @@ export function createViewerTransformControls({
       ? transformControls.getHelper()
       : null;
 
+  if (transformControlsHelper) {
+    forceOverlayRendering(transformControlsHelper);
+  }
   transformControls.setMode('translate');
   transformControls.setSpace('local');
   transformControls.size = 0.95;
@@ -30,31 +54,13 @@ export function createViewerTransformControls({
       return;
     }
 
-    if (getActiveTransformTarget() === 'crop') {
-      callbacks.onCropObjectChange();
+    if (callbacks.onObjectChange?.(transformControls.object)) {
       return;
     }
 
     transformHandle.updateMatrix();
     transformHandle.updateMatrixWorld(true);
     callbacks.onRootObjectChange(transformHandle.matrix);
-  });
-  transformControls.addEventListener('mouseDown', () => {
-    if (getActiveTransformTarget() === 'crop' && getSelectedCropBox()) {
-      setCropTransformSnapshot(callbacks.createCropSnapshot());
-    }
-  });
-  transformControls.addEventListener('mouseUp', () => {
-    const cropTransformSnapshot = getCropTransformSnapshot();
-    if (getActiveTransformTarget() !== 'crop' || !cropTransformSnapshot) {
-      setCropTransformSnapshot(null);
-      return;
-    }
-
-    if (!callbacks.snapshotsEqual(cropTransformSnapshot)) {
-      callbacks.pushCropUndoSnapshot(cropTransformSnapshot);
-    }
-    setCropTransformSnapshot(null);
   });
   if (transformControlsHelper) {
     scene.add(transformControlsHelper);

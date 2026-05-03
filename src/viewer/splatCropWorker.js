@@ -90,26 +90,104 @@ async function readSpzData(spz) {
   return data;
 }
 
-function buildSourceToBoxMatrices(THREE, cropBoxMatrices, descriptors) {
-  const sourceToBoxMatrices = [];
-  cropBoxMatrices.forEach((boxMatrixArray) => {
-    const boxInverse = new THREE.Matrix4().fromArray(boxMatrixArray).invert();
+function buildSourceToScreenSelections(
+  THREE,
+  screenSelections,
+  descriptors,
+) {
+  const sourceToScreenSelections = [];
+  screenSelections.forEach((selection) => {
+    const viewProjectionMatrix = new THREE.Matrix4().fromArray(
+      selection.viewProjectionMatrix,
+    );
     descriptors.forEach((descriptor) => {
-      sourceToBoxMatrices.push(
-        boxInverse
-          .clone()
-          .multiply(
-            new THREE.Matrix4().fromArray(descriptor.sourceToWorldMatrix),
-          ),
+      const sourceToWorldMatrix = new THREE.Matrix4().fromArray(
+        descriptor.sourceToWorldMatrix,
       );
+      sourceToScreenSelections.push({
+        planes: selection.planeMatrices
+          ? buildSourceSpacePlanes(
+              THREE,
+              selection.planeMatrices,
+              sourceToWorldMatrix,
+            )
+          : null,
+        matrix: viewProjectionMatrix
+          .clone()
+          .multiply(sourceToWorldMatrix),
+        rect: selection.rect,
+      });
     });
   });
-  return sourceToBoxMatrices;
+  return sourceToScreenSelections;
 }
 
-function collectSurvivorIndices(THREE, splatData, splatCount, sourceToBoxMatrices) {
+function createPlaneFromMatrix(THREE, matrixArray) {
+  const matrix = new THREE.Matrix4().fromArray(matrixArray);
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  const normal = new THREE.Vector3(0, 0, 1);
+  matrix.decompose(position, quaternion, scale);
+  normal.applyQuaternion(quaternion).normalize();
+  return new THREE.Plane().setFromNormalAndCoplanarPoint(normal, position);
+}
+
+function buildSourceSpacePlanes(THREE, planeMatrices, sourceToWorldMatrix) {
+  const worldToSourceMatrix = sourceToWorldMatrix.clone().invert();
+  return planeMatrices.map((matrixArray) =>
+    createPlaneFromMatrix(THREE, matrixArray).applyMatrix4(
+      worldToSourceMatrix,
+    ),
+  );
+}
+
+function centerIsInsideScreenSelection(center, clip, selection) {
+  if (selection.planes) {
+    return selection.planes.every((plane) => plane.distanceToPoint(center) <= 0);
+  }
+
+  clip.set(center.x, center.y, center.z, 1).applyMatrix4(selection.matrix);
+  if (!Number.isFinite(clip.w) || clip.w <= 0) {
+    return false;
+  }
+
+  const inverseW = 1 / clip.w;
+  const x = clip.x * inverseW;
+  const y = clip.y * inverseW;
+  const z = clip.z * inverseW;
+  const rect = selection.rect;
+  return (
+    x >= rect.minX &&
+    x <= rect.maxX &&
+    y >= rect.minY &&
+    y <= rect.maxY &&
+    z >= -1 &&
+    z <= 1
+  );
+}
+
+function centerIsSelectedForDeletion(
+  center,
+  clip,
+  sourceToScreenSelections,
+) {
+  for (const selection of sourceToScreenSelections) {
+    if (centerIsInsideScreenSelection(center, clip, selection)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectSurvivorIndices(
+  THREE,
+  splatData,
+  splatCount,
+  sourceToScreenSelections,
+) {
   const center = new THREE.Vector3();
-  const local = new THREE.Vector3();
+  const clip = new THREE.Vector4();
   const survivors = [];
   for (let index = 0; index < splatCount; index++) {
     center.set(
@@ -117,19 +195,12 @@ function collectSurvivorIndices(THREE, splatData, splatCount, sourceToBoxMatrice
       splatData.centers[index * 3 + 1],
       splatData.centers[index * 3 + 2],
     );
-    let inside = false;
-    for (const matrix of sourceToBoxMatrices) {
-      local.copy(center).applyMatrix4(matrix);
-      if (
-        Math.abs(local.x) <= 1 &&
-        Math.abs(local.y) <= 1 &&
-        Math.abs(local.z) <= 1
-      ) {
-        inside = true;
-        break;
-      }
-    }
-    if (!inside) {
+    const selectedForDeletion = centerIsSelectedForDeletion(
+      center,
+      clip,
+      sourceToScreenSelections,
+    );
+    if (!selectedForDeletion) {
       survivors.push(index);
     }
   }
@@ -192,7 +263,11 @@ function throwUnsupportedLodError() {
   throw err;
 }
 
-async function rewriteSpzBytes({ bytes, cropBoxMatrices, descriptors }) {
+async function rewriteSpzBytes({
+  bytes,
+  descriptors,
+  screenSelections,
+}) {
   const { THREE, SpzReader, SpzWriter } = await getModules();
   const spz = new SpzReader({ fileBytes: Buffer.from(bytes) });
   await spz.parseHeader();
@@ -201,16 +276,16 @@ async function rewriteSpzBytes({ bytes, cropBoxMatrices, descriptors }) {
   }
 
   const splatData = await readSpzData(spz);
-  const sourceToBoxMatrices = buildSourceToBoxMatrices(
+  const sourceToScreenSelections = buildSourceToScreenSelections(
     THREE,
-    cropBoxMatrices,
+    screenSelections || [],
     descriptors,
   );
   const survivors = collectSurvivorIndices(
     THREE,
     splatData,
     spz.numSplats,
-    sourceToBoxMatrices,
+    sourceToScreenSelections,
   );
   const deleted = spz.numSplats - survivors.length;
   if (survivors.length === 0) {

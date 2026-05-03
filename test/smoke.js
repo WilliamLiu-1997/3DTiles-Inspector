@@ -19,6 +19,66 @@ const IDENTITY_MATRIX4 = [
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 ];
 
+function createScreenSelectionPayload({
+  action = 'exclude',
+  planeMatrices = null,
+  rect = {
+    maxX: 1,
+    maxY: 1,
+    minX: -1,
+    minY: -1,
+  },
+} = {}) {
+  const payload = {
+    action,
+    rect,
+    viewProjectionMatrix: IDENTITY_MATRIX4,
+  };
+  if (planeMatrices) {
+    payload.planeMatrices = planeMatrices;
+  }
+  return payload;
+}
+
+async function createBoxPlaneMatrices({
+  maxX = 1,
+  maxY = 1,
+  maxZ = 1,
+  minX = -1,
+  minY = -1,
+  minZ = -1,
+} = {}) {
+  const THREE = await import('three');
+  const worldZ = new THREE.Vector3(0, 0, 1);
+  const unitScale = new THREE.Vector3(1, 1, 1);
+
+  function createPlaneMatrix(normalArray, pointArray) {
+    const normal = new THREE.Vector3(...normalArray).normalize();
+    const point = new THREE.Vector3(...pointArray);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      normal,
+      point,
+    );
+    const position = normal.clone().multiplyScalar(-plane.constant);
+    const quaternion = new THREE.Quaternion().setFromUnitVectors(
+      worldZ,
+      normal,
+    );
+    return new THREE.Matrix4()
+      .compose(position, quaternion, unitScale)
+      .toArray();
+  }
+
+  return [
+    createPlaneMatrix([-1, 0, 0], [minX, 0, 0]),
+    createPlaneMatrix([1, 0, 0], [maxX, 0, 0]),
+    createPlaneMatrix([0, -1, 0], [0, minY, 0]),
+    createPlaneMatrix([0, 1, 0], [0, maxY, 0]),
+    createPlaneMatrix([0, 0, -1], [0, 0, minZ]),
+    createPlaneMatrix([0, 0, 1], [0, 0, maxZ]),
+  ];
+}
+
 async function postSave(sessionUrl, body) {
   const origin = new URL(sessionUrl).origin;
   const response = await fetch(
@@ -44,7 +104,7 @@ async function assertCropSaveDeletesTwoSplats({ tilesetPath, readSpzBytes }) {
     const payload = await postSave(session.url, {
       geometricErrorLayerScale: 1,
       geometricErrorScale: 2,
-      splatCropBoxes: [{ matrix: IDENTITY_MATRIX4 }],
+      splatScreenSelections: [createScreenSelectionPayload()],
       transform: IDENTITY_MATRIX4,
     });
     assert.strictEqual(payload.deletedSplats, 2);
@@ -60,6 +120,64 @@ async function assertCropSaveDeletesTwoSplats({ tilesetPath, readSpzBytes }) {
   const centers = await readSpzCenters(readSpzBytes());
   assert.strictEqual(centers.length, 1);
   assert.ok(Math.abs(centers[0].x - 3) < 0.01);
+}
+
+async function assertScreenSelectionSaveDeletesTwoSplats({
+  tilesetPath,
+  readSpzBytes,
+}) {
+  const session = await api.startInspectorSession(tilesetPath, {
+    handleSignals: false,
+    openBrowser: false,
+  });
+  try {
+    const payload = await postSave(session.url, {
+      geometricErrorLayerScale: 1,
+      geometricErrorScale: 1,
+      splatScreenSelections: [
+        createScreenSelectionPayload(),
+      ],
+      transform: IDENTITY_MATRIX4,
+    });
+    assert.strictEqual(payload.deletedSplats, 2);
+    assert.strictEqual(payload.processedSplatResources, 1);
+  } finally {
+    await session.close();
+  }
+
+  const centers = await readSpzCenters(readSpzBytes());
+  assert.strictEqual(centers.length, 1);
+  assert.ok(Math.abs(centers[0].x - 3) < 0.01);
+}
+
+async function assertScreenSelectionFarPlaneLimitsDepth({
+  planeMatrices,
+  tilesetPath,
+  readSpzBytes,
+}) {
+  const session = await api.startInspectorSession(tilesetPath, {
+    handleSignals: false,
+    openBrowser: false,
+  });
+  try {
+    const payload = await postSave(session.url, {
+      geometricErrorLayerScale: 1,
+      geometricErrorScale: 1,
+      splatScreenSelections: [
+        createScreenSelectionPayload({ planeMatrices }),
+      ],
+      transform: IDENTITY_MATRIX4,
+    });
+    assert.strictEqual(payload.deletedSplats, 2);
+    assert.strictEqual(payload.processedSplatResources, 1);
+  } finally {
+    await session.close();
+  }
+
+  const centers = await readSpzCenters(readSpzBytes());
+  assert.strictEqual(centers.length, 1);
+  assert.ok(Math.abs(centers[0].x) < 0.01);
+  assert.ok(Math.abs(centers[0].z - 2) < 0.01);
 }
 
 async function assertCropSavePrunesFullyDeletedSplatTile(baseDir) {
@@ -119,7 +237,7 @@ async function assertCropSavePrunesFullyDeletedSplatTile(baseDir) {
     const payload = await postSave(session.url, {
       geometricErrorLayerScale: 1,
       geometricErrorScale: 1,
-      splatCropBoxes: [{ matrix: IDENTITY_MATRIX4 }],
+      splatScreenSelections: [createScreenSelectionPayload()],
       transform: IDENTITY_MATRIX4,
     });
     assert.strictEqual(payload.deletedSplats, 2);
@@ -192,7 +310,7 @@ async function assertCropSaveRewritesMultipleBufferViews(baseDir) {
     const payload = await postSave(session.url, {
       geometricErrorLayerScale: 1,
       geometricErrorScale: 1,
-      splatCropBoxes: [{ matrix: IDENTITY_MATRIX4 }],
+      splatScreenSelections: [createScreenSelectionPayload()],
       transform: IDENTITY_MATRIX4,
     });
     assert.strictEqual(payload.deletedSplats, 2);
@@ -379,6 +497,63 @@ async function main() {
 
     await assertCropSaveRewritesMultipleBufferViews(tempDir);
     await assertCropSavePrunesFullyDeletedSplatTile(tempDir);
+
+    const screenCropDir = path.join(tempDir, 'crop-screen');
+    fs.mkdirSync(screenCropDir);
+    const screenSpzBytes = await createSpzBytes(cropPoints);
+    const screenTilesetPath = path.join(screenCropDir, 'tileset.json');
+    const screenGltfPath = path.join(screenCropDir, 'splats.gltf');
+    const screenBinPath = path.join(screenCropDir, 'splats.bin');
+    fs.writeFileSync(screenBinPath, screenSpzBytes);
+    fs.writeFileSync(
+      screenGltfPath,
+      JSON.stringify(makeGaussianGltf('splats.bin', screenSpzBytes.length)),
+      'utf8',
+    );
+    writeSplatTileset(screenTilesetPath, 'splats.gltf');
+    await assertScreenSelectionSaveDeletesTwoSplats({
+      tilesetPath: screenTilesetPath,
+      readSpzBytes: () =>
+        readGltfBufferViewBytes(screenGltfPath, screenBinPath),
+    });
+
+    const screenFarPlaneDir = path.join(tempDir, 'crop-screen-far-plane');
+    fs.mkdirSync(screenFarPlaneDir);
+    const screenFarPlaneSpzBytes = await createSpzBytes([
+      [0, 0, 0],
+      [0, 0, 0.75],
+      [0, 0, 2],
+    ]);
+    const screenFarPlaneTilesetPath = path.join(
+      screenFarPlaneDir,
+      'tileset.json',
+    );
+    const screenFarPlaneGltfPath = path.join(
+      screenFarPlaneDir,
+      'splats.gltf',
+    );
+    const screenFarPlaneBinPath = path.join(screenFarPlaneDir, 'splats.bin');
+    fs.writeFileSync(screenFarPlaneBinPath, screenFarPlaneSpzBytes);
+    fs.writeFileSync(
+      screenFarPlaneGltfPath,
+      JSON.stringify(
+        makeGaussianGltf('splats.bin', screenFarPlaneSpzBytes.length),
+      ),
+      'utf8',
+    );
+    writeSplatTileset(screenFarPlaneTilesetPath, 'splats.gltf');
+    await assertScreenSelectionFarPlaneLimitsDepth({
+      planeMatrices: await createBoxPlaneMatrices({
+        maxZ: 1,
+        minZ: -0.5,
+      }),
+      tilesetPath: screenFarPlaneTilesetPath,
+      readSpzBytes: () =>
+        readGltfBufferViewBytes(
+          screenFarPlaneGltfPath,
+          screenFarPlaneBinPath,
+        ),
+    });
 
     console.log('ok');
   } finally {
