@@ -34,7 +34,7 @@ export function updateCropControls({
     cropListEl.appendChild(
       createSelectionControl({
         active: selection.id === activeScreenSelectionId,
-        label: `Screen ${index + 1}`,
+        label: `Region ${index + 1}`,
         onScreenSelectionRemove,
         onScreenSelectionSelect,
         selection,
@@ -64,7 +64,6 @@ function createSelectionControl({
   const control = document.createElement('div');
   const header = document.createElement('div');
   const title = document.createElement('span');
-  const farValue = document.createElement('span');
   const removeButton = document.createElement('button');
 
   control.classList.add('screen-region');
@@ -72,7 +71,6 @@ function createSelectionControl({
   control.tabIndex = 0;
   header.classList.add('screen-region-header');
   title.textContent = label;
-  farValue.textContent = `Far ${formatFarDepth(selection.depthRange.farDepth)}`;
   removeButton.type = 'button';
   removeButton.textContent = 'Delete';
   removeButton.classList.add('screen-region-remove');
@@ -94,18 +92,7 @@ function createSelectionControl({
     onScreenSelectionRemove?.(selection.id);
   });
 
-  header.append(title, farValue, removeButton);
+  header.append(title, removeButton);
   control.append(header);
   return control;
-}
-
-function formatFarDepth(value) {
-  const absValue = Math.abs(value);
-  if (absValue >= 1000) {
-    return `${(value / 1000).toFixed(2)} km`;
-  }
-  if (absValue >= 10) {
-    return `${value.toFixed(1)} m`;
-  }
-  return `${value.toFixed(2)} m`;
 }

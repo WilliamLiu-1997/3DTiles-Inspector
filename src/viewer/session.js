@@ -1416,31 +1416,31 @@ function buildViewerHtml(viewerConfig) {
         min-width: 0;
         display: grid;
         gap: 6px;
-        padding: 8px 10px;
+        padding: 7px 14px;
         border: 1px solid rgba(22, 50, 79, 0.1);
-        border-radius: 8px;
+        border-radius: 999px;
         cursor: pointer;
-        font-size: 12px;
-        background: #efe3bd;
-        color: #5c4a18;
+        font-size: 14px;
+        background: #dde7f2;
+        color: #16324f;
       }
 
       .crop-list .screen-region-header {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-template-columns: minmax(0, 1fr) auto;
         align-items: center;
         gap: 8px;
-        font-weight: 700;
+        font-weight: 600;
       }
 
       .crop-list .screen-region-remove {
         min-width: 0;
-        height: 24px;
-        padding: 0 8px;
+        height: auto;
+        padding: 2px 8px;
         border: 0;
-        border-radius: 6px;
-        background: rgba(92, 74, 24, 0.08);
-        color: #6b5417;
+        border-radius: 999px;
+        background: rgba(22, 50, 79, 0.08);
+        color: #16324f;
         justify-content: center;
         font-size: 11px;
         font-weight: 700;
@@ -1449,12 +1449,24 @@ function buildViewerHtml(viewerConfig) {
 
       .crop-list .screen-region-remove:hover,
       .crop-list .screen-region-remove:focus-visible {
-        background: rgba(92, 74, 24, 0.16);
+        background: rgba(22, 50, 79, 0.16);
       }
 
       .crop-list .screen-region.selected {
+        background: #efe3bd;
         border-color: rgba(92, 74, 24, 0.42);
+        color: #5c4a18;
         box-shadow: 0 0 0 2px rgba(255, 210, 77, 0.32);
+      }
+
+      .crop-list .screen-region.selected .screen-region-remove {
+        background: rgba(92, 74, 24, 0.08);
+        color: #6b5417;
+      }
+
+      .crop-list .screen-region.selected .screen-region-remove:hover,
+      .crop-list .screen-region.selected .screen-region-remove:focus-visible {
+        background: rgba(92, 74, 24, 0.16);
       }
 
       .crop-list .screen-region:focus-visible {

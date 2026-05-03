@@ -23,6 +23,7 @@ const SCREEN_SELECTION_EXCLUDE_COLOR = new Color(1, 0.82, 0);
 const SCREEN_SELECTION_HIDDEN_COLOR = new Color(1, 1, 1);
 const SCREEN_SELECTION_HIDDEN_ALPHA = 0;
 const SCREEN_SELECTION_FAR_HANDLE_COLOR = 0xffffff;
+const SCREEN_SELECTION_FAR_HANDLE_AXIS_DIRECTION = -1;
 const SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER = 1000000;
 const SCREEN_SELECTION_FAR_HANDLE_GRID_DIVISIONS = 8;
 const SCREEN_SELECTION_FAR_HANDLE_GUIDE_LINE_WIDTH = 0.5;
@@ -142,16 +143,21 @@ function pushFarHandleSegment(vertices, start, end) {
 }
 
 function getCurrentFarPlaneCorner(corner, ratio) {
-  return [corner[0] * ratio, corner[1] * ratio, 0];
+  return [
+    corner[0] * ratio * SCREEN_SELECTION_FAR_HANDLE_AXIS_DIRECTION,
+    corner[1] * ratio,
+    0,
+  ];
 }
 
 function getCurrentNearPlaneCorner(corner, selection) {
   return [
-    corner[0],
+    corner[0] * SCREEN_SELECTION_FAR_HANDLE_AXIS_DIRECTION,
     corner[1],
-    (corner[2] || 0) +
+    ((corner[2] || 0) +
       selection.depthRange.maxFarDepth -
-      selection.depthRange.farDepth,
+      selection.depthRange.farDepth) *
+      SCREEN_SELECTION_FAR_HANDLE_AXIS_DIRECTION,
   ];
 }
 
@@ -964,6 +970,8 @@ export function updateScreenSelectionFarHandle(
   if (!normalizeFarPlaneAxes(selectionForward, farPlaneRight, farPlaneUp)) {
     return;
   }
+  farPlaneRight.multiplyScalar(SCREEN_SELECTION_FAR_HANDLE_AXIS_DIRECTION);
+  selectionForward.multiplyScalar(SCREEN_SELECTION_FAR_HANDLE_AXIS_DIRECTION);
 
   const matrix = new Matrix4().makeBasis(
     farPlaneRight,
