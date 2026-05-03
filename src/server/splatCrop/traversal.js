@@ -416,13 +416,16 @@ function markSplatResourceProgress(context, resourcePath) {
     totalResources > 0
       ? (progress.completedResources / totalResources) * 100
       : 100;
+  const readStreamHint = progress.tileReadStreamsClosed
+    ? ' Tile read streams closed.'
+    : '';
 
   progress.onProgress({
     completedResources: progress.completedResources,
     message:
       totalResources > 0
-        ? `Deleting cropped splats (${progress.completedResources}/${totalResources} resources)...`
-        : 'Deleting cropped splats...',
+        ? `Deleting cropped splats (${progress.completedResources}/${totalResources} resources)...${readStreamHint}`
+        : `Deleting cropped splats...${readStreamHint}`,
     percent,
     phase: 'crop',
     totalResources,
@@ -534,7 +537,7 @@ async function processGltfResource({
   const empty = !hasScenePrimitives(resource.json);
   const boundsKnown = empty || !hasNonGaussianScenePrimitives(resource.json);
   if (modified) {
-    saveGltfResource(resource);
+    await saveGltfResource(resource);
   }
 
   return {
@@ -932,7 +935,7 @@ async function traverseTileset({
   );
 
   if (context.tilesetModified) {
-    writeJsonAtomic(resolvedTilesetPath, tilesetJson);
+    await writeJsonAtomic(resolvedTilesetPath, tilesetJson);
   }
   return {
     boxInParent: rootResult.boxInParent,

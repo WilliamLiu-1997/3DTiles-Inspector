@@ -6,6 +6,7 @@ const { resolveAndValidateTilesetPath } = require('../tileset-path');
 const { sendJson, sendText, normalizeRequestTarget } = require('./httpHelpers');
 const { handleViewerRequest } = require('./httpServer');
 const { openBrowser } = require('./openBrowser');
+const { createStaticFileReadGate } = require('./staticFileReadGate');
 const {
   VIEWER_HTML_NAME,
   createViewerAssetsDir,
@@ -27,6 +28,7 @@ async function startInspectorSession(
     tilesetUrl: `./${getBrowserRelativePath(rootDir, tilesetPath)}`,
   });
   let sessionOrigin = null;
+  const staticFileReadGate = createStaticFileReadGate();
   let closingPromise = null;
   let shutdownTimer = null;
   let cleanedUp = false;
@@ -129,6 +131,7 @@ async function startInspectorSession(
       req,
       res,
       requestUrl,
+      staticFileReadGate,
     ).catch((err) => {
       sendJson(res, 500, {
         error:

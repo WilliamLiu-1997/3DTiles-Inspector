@@ -28,7 +28,12 @@ function createSaveTransformResponsePayload(
   };
 }
 
-async function handleSaveTransformRequest(rootTilesetPath, req, res) {
+async function handleSaveTransformRequest(
+  rootTilesetPath,
+  req,
+  res,
+  staticFileReadGate = null,
+) {
   let payload;
   try {
     const body = await readRequestBody(req);
@@ -118,12 +123,19 @@ async function handleSaveTransformRequest(rootTilesetPath, req, res) {
     });
 
     try {
-      const saveResult = await saveViewerTransform(rootTilesetPath, normalizedEdit, {
-        geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
-        geometricErrorScale: normalizedGeometricErrorScale,
-        onProgress: (progress) => sendJsonLine(res, progress),
-        splatScreenSelections: normalizedSplatScreenSelections,
-      });
+      const runSave = ({ tileReadStreamsClosed = false } = {}) =>
+        saveViewerTransform(rootTilesetPath, normalizedEdit, {
+          geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
+          geometricErrorScale: normalizedGeometricErrorScale,
+          onProgress: (progress) => sendJsonLine(res, progress),
+          splatScreenSelections: normalizedSplatScreenSelections,
+          tileReadStreamsClosed,
+        });
+      const saveResult = staticFileReadGate
+        ? await staticFileReadGate.runExclusiveSave(() =>
+            runSave({ tileReadStreamsClosed: true }),
+          )
+        : await runSave();
       sendJsonLine(res, {
         type: 'complete',
         ...createSaveTransformResponsePayload(
@@ -148,11 +160,18 @@ async function handleSaveTransformRequest(rootTilesetPath, req, res) {
 
   let saveResult;
   try {
-    saveResult = await saveViewerTransform(rootTilesetPath, normalizedEdit, {
-      geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
-      geometricErrorScale: normalizedGeometricErrorScale,
-      splatScreenSelections: normalizedSplatScreenSelections,
-    });
+    const runSave = ({ tileReadStreamsClosed = false } = {}) =>
+      saveViewerTransform(rootTilesetPath, normalizedEdit, {
+        geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
+        geometricErrorScale: normalizedGeometricErrorScale,
+        splatScreenSelections: normalizedSplatScreenSelections,
+        tileReadStreamsClosed,
+      });
+    saveResult = staticFileReadGate
+      ? await staticFileReadGate.runExclusiveSave(() =>
+          runSave({ tileReadStreamsClosed: true }),
+        )
+      : await runSave();
   } catch (err) {
     sendJson(res, 500, {
       error:

@@ -42,7 +42,10 @@ function resolveStaticFilePath(tilesDir, viewerAssetsDir, pathname) {
     throw new InspectorError('Request path escapes the viewer root.');
   }
 
-  return resolvedPath;
+  return {
+    filePath: resolvedPath,
+    isViewerAsset,
+  };
 }
 
 async function handleViewerRequest(
@@ -52,6 +55,7 @@ async function handleViewerRequest(
   req,
   res,
   requestUrl = null,
+  staticFileReadGate = null,
 ) {
   const normalizedRequestUrl =
     requestUrl || new URL(normalizeRequestTarget(req.url), 'http://127.0.0.1');
@@ -61,7 +65,12 @@ async function handleViewerRequest(
       sendText(res, 405, 'Method Not Allowed', { Allow: 'POST' });
       return;
     }
-    await handleSaveTransformRequest(rootTilesetPath, req, res);
+    await handleSaveTransformRequest(
+      rootTilesetPath,
+      req,
+      res,
+      staticFileReadGate,
+    );
     return;
   }
 
@@ -70,9 +79,9 @@ async function handleViewerRequest(
     return;
   }
 
-  let filePath;
+  let resolvedFile;
   try {
-    filePath = resolveStaticFilePath(
+    resolvedFile = resolveStaticFilePath(
       tilesDir,
       viewerAssetsDir,
       normalizedRequestUrl.pathname,
@@ -82,15 +91,36 @@ async function handleViewerRequest(
     return;
   }
 
+  const { filePath, isViewerAsset } = resolvedFile;
+  let releaseRead = null;
+  try {
+    if (!isViewerAsset && staticFileReadGate) {
+      releaseRead = await staticFileReadGate.acquireRead();
+      if (res.destroyed) {
+        releaseRead();
+        return;
+      }
+    }
+  } catch (err) {
+    sendText(res, 500, 'Failed to acquire file read lock.');
+    return;
+  }
+
   let stats;
   try {
     stats = fs.statSync(filePath);
   } catch (err) {
+    if (releaseRead) {
+      releaseRead();
+    }
     sendText(res, 404, 'Not Found');
     return;
   }
 
   if (!stats.isFile()) {
+    if (releaseRead) {
+      releaseRead();
+    }
     sendText(res, 404, 'Not Found');
     return;
   }
@@ -105,10 +135,36 @@ async function handleViewerRequest(
 
   if (req.method === 'HEAD') {
     res.end();
+    if (releaseRead) {
+      releaseRead();
+    }
     return;
   }
 
-  fs.createReadStream(filePath).pipe(res);
+  const stream = fs.createReadStream(filePath);
+  let released = false;
+  const release = () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    if (releaseRead) {
+      releaseRead();
+    }
+  };
+  stream.once('close', release);
+  stream.once('error', (err) => {
+    release();
+    if (res.headersSent) {
+      res.destroy(err);
+    } else {
+      sendText(res, 500, 'Failed to read file.');
+    }
+  });
+  res.once('close', () => {
+    stream.destroy();
+  });
+  stream.pipe(res);
 }
 
 module.exports = {

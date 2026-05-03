@@ -332,6 +332,12 @@ function buildViewerHtml(viewerConfig) {
         cursor: not-allowed;
       }
 
+      .toolbar-dock.saving .screen-region {
+        opacity: 0.7;
+        cursor: not-allowed;
+        pointer-events: none;
+      }
+
       .range-field {
         display: grid;
         gap: 4px;
@@ -621,7 +627,7 @@ function buildViewerHtml(viewerConfig) {
         Hide Sidebar
       </button>
       <div id="toolbar" class="toolbar">
-        <div class="toolbar-section">
+        <div class="toolbar-section" data-save-lock-exempt>
           <div class="toolbar-section-header">
             <p class="toolbar-section-title">Canvas</p>
           </div>

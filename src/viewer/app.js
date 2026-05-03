@@ -77,6 +77,8 @@ const MOVE_TO_TILES_POSE = {
   pitch: MOVE_TO_TILES_PITCH,
   roll: MOVE_TO_TILES_ROLL,
 };
+const SAVE_LOCK_CONTROL_SELECTOR = 'button, input, select, textarea';
+const SAVE_LOCK_EXEMPT_SELECTOR = '[data-save-lock-exempt]';
 
 const { handleSaveProgress, setSaveProgress, setStatus } = createStatusPanel({
   saveProgressEl,
@@ -149,6 +151,46 @@ let cropController = null;
 let setPositionController = null;
 let transformModeController = null;
 let rootTransform = null;
+let savedControlDisabledStates = null;
+
+function setSaveUiLocked(locked) {
+  if (!toolbarDockEl) {
+    return;
+  }
+
+  if (locked) {
+    if (savedControlDisabledStates) {
+      return;
+    }
+
+    savedControlDisabledStates = new Map();
+    toolbarDockEl
+      .querySelectorAll(SAVE_LOCK_CONTROL_SELECTOR)
+      .forEach((control) => {
+        if (control.closest(SAVE_LOCK_EXEMPT_SELECTOR)) {
+          return;
+        }
+        savedControlDisabledStates.set(control, control.disabled);
+        control.disabled = true;
+      });
+    toolbarDockEl.classList.add('saving');
+    toolbarDockEl.setAttribute('aria-busy', 'true');
+    return;
+  }
+
+  if (!savedControlDisabledStates) {
+    return;
+  }
+
+  toolbarDockEl.classList.remove('saving');
+  toolbarDockEl.removeAttribute('aria-busy');
+  savedControlDisabledStates.forEach((wasDisabled, control) => {
+    if (control.isConnected) {
+      control.disabled = wasDisabled;
+    }
+  });
+  savedControlDisabledStates = null;
+}
 
 cameraController.setPointerDownFilter((event) => {
   return !(cropController?.getPendingMode() && event.button === 0);
@@ -324,6 +366,12 @@ function cancelPositionPickModes() {
   cropController.cancelMode();
 }
 
+function exitSaveInteractionModes() {
+  setPositionController.cancelMode();
+  cropController.deactivate();
+  transformModeController.setMode(null);
+}
+
 geometricError.initializeInputs();
 transformModeController.setMode(null);
 
@@ -368,7 +416,7 @@ function resetToSaved() {
   setStatus('Reset to the last saved transform.');
 }
 
-function loadTileset(url) {
+function loadTileset(url, { frameOnLoad = true } = {}) {
   if (tiles) {
     editableGroup.remove(tiles.group);
     tiles.dispose();
@@ -416,7 +464,7 @@ function loadTileset(url) {
 
   editableGroup.add(next.group);
 
-  let framed = false;
+  let framed = !frameOnLoad;
   const tryFrame = () => {
     if (framed) {
       return;
@@ -449,6 +497,8 @@ async function saveTransform() {
   setSaveProgress(0);
   const splatScreenSelections = cropController.getPayload();
   const cropRegionCount = splatScreenSelections.length;
+  exitSaveInteractionModes();
+  setSaveUiLocked(true);
   setStatus(
     cropRegionCount > 0
       ? 'Saving transform and deleting cropped splats...'
@@ -458,6 +508,7 @@ async function saveTransform() {
   const currentMatrix = rootTransform.getCurrentMatrix();
   const incrementalMatrix = rootTransform.getIncrementalSinceSaved(currentMatrix);
   const saveState = geometricError.getSaveState();
+  let unlockSaveUi = true;
 
   try {
     const payload = await postSaveTransform({
@@ -483,7 +534,7 @@ async function saveTransform() {
         payload.processedSplatResources || 0,
       );
       cropController.clearAll();
-      loadTileset(TILESET_URL);
+      loadTileset(TILESET_URL, { frameOnLoad: false });
       setStatus(
         `Saved transform and deleted ${deletedSplats} cropped splats from ${processedSplatResources} splat resource${processedSplatResources === 1 ? '' : 's'}. Reloading tileset.`,
       );
@@ -500,7 +551,10 @@ async function saveTransform() {
     setStatus(err && err.message ? err.message : String(err), true);
   } finally {
     setSaveProgress(null);
-    saveButton.disabled = false;
+    if (unlockSaveUi) {
+      setSaveUiLocked(false);
+      saveButton.disabled = false;
+    }
   }
 }
 

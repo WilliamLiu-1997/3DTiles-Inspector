@@ -5,6 +5,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const api = require('../src');
+const { writeFileAtomic } = require('../src/server/fileUtils');
 const {
   buildGlb,
   createSpzBytes,
@@ -58,6 +59,48 @@ function assertBoundingVolumeBox(
     const length = Math.hypot(axis[0], axis[1], axis[2]);
     assertClose(length, value, `${label}.halfAxis[${index}]`);
   });
+}
+
+async function pauseReadStreamAfterFirstChunk(filePath) {
+  const stream = fs.createReadStream(filePath, { highWaterMark: 1 });
+  const closed = new Promise((resolve, reject) => {
+    stream.once('close', resolve);
+    stream.once('error', reject);
+  });
+
+  await new Promise((resolve, reject) => {
+    stream.once('error', reject);
+    stream.once('data', () => {
+      stream.pause();
+      resolve();
+    });
+  });
+
+  return {
+    async close() {
+      stream.resume();
+      await closed;
+    },
+  };
+}
+
+async function assertAtomicWriteRetriesLockedTarget(baseDir) {
+  const targetPath = path.join(baseDir, 'locked-replace.glb');
+  fs.writeFileSync(targetPath, Buffer.alloc(1024));
+
+  const pausedRead = await pauseReadStreamAfterFirstChunk(targetPath);
+  const resumeTimer = setTimeout(() => {
+    pausedRead.close().catch(() => {});
+  }, 100);
+
+  try {
+    await writeFileAtomic(targetPath, Buffer.from('rewritten'));
+  } finally {
+    clearTimeout(resumeTimer);
+    await pausedRead.close();
+  }
+
+  assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), 'rewritten');
 }
 
 function createScreenSelectionPayload({
@@ -519,6 +562,8 @@ async function main() {
   );
 
   try {
+    await assertAtomicWriteRetriesLockedTarget(tempDir);
+
     const tilesetPath = path.join(tempDir, 'tileset.json');
     const nestedDir = path.join(tempDir, 'nested');
     const nestedTilesetPath = path.join(nestedDir, 'tileset.json');

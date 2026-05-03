@@ -254,7 +254,7 @@ function collectExternalTilesetPaths(tile, baseDir, results) {
   });
 }
 
-function updateTilesetJsonFile(
+async function updateTilesetJsonFile(
   tilesetPath,
   {
     geometricErrorLayerScale,
@@ -316,12 +316,12 @@ function updateTilesetJsonFile(
     effectiveLeafGeometricError,
     `${resolvedPath}.root`,
   );
-  writeJsonAtomic(resolvedPath, tileset);
+  await writeJsonAtomic(resolvedPath, tileset);
 
   const nestedTilesets = new Set();
   collectExternalTilesetPaths(tileset.root, tilesetDir, nestedTilesets);
-  nestedTilesets.forEach((childTilesetPath) => {
-    updateTilesetJsonFile(
+  for (const childTilesetPath of nestedTilesets) {
+    await updateTilesetJsonFile(
       childTilesetPath,
       {
         geometricErrorLayerScale,
@@ -332,7 +332,7 @@ function updateTilesetJsonFile(
       },
       visited,
     );
-  });
+  }
 
   return tileset;
 }
@@ -345,6 +345,7 @@ async function saveViewerTransform(
     geometricErrorScale = 1,
     onProgress = null,
     splatScreenSelections = [],
+    tileReadStreamsClosed = false,
   } = {},
 ) {
   const emitProgress = (progress) => {
@@ -412,6 +413,7 @@ async function saveViewerTransform(
             : undefined,
         });
       },
+      tileReadStreamsClosed,
     },
   );
 
@@ -421,7 +423,7 @@ async function saveViewerTransform(
     phase: 'tileset',
   });
 
-  updateTilesetJsonFile(tilesetPath, {
+  await updateTilesetJsonFile(tilesetPath, {
     geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
     geometricErrorScale: normalizedGeometricErrorScale,
     rootDir,
@@ -457,7 +459,7 @@ async function saveViewerTransform(
           );
     summary.viewer_geometric_error_layer_scale =
       previousGeometricErrorLayerScale * normalizedGeometricErrorLayerScale;
-    writeJsonAtomic(summaryPath, summary);
+    await writeJsonAtomic(summaryPath, summary);
   }
 
   emitProgress({

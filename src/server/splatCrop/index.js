@@ -30,7 +30,7 @@ async function deleteSplatsInNormalizedSelections(
   rootTilesetPath,
   rootTransform,
   normalizedScreenSelections = [],
-  { onProgress = null } = {},
+  { onProgress = null, tileReadStreamsClosed = false } = {},
 ) {
   if (normalizedScreenSelections.length === 0) {
     return {
@@ -51,12 +51,15 @@ async function deleteSplatsInNormalizedSelections(
     tilesetPath,
   }).size;
   if (typeof onProgress === 'function') {
+    const readStreamHint = tileReadStreamsClosed
+      ? ' Tile read streams closed.'
+      : '';
     onProgress({
       completedResources: 0,
       message:
         totalResources > 0
-          ? `Deleting cropped splats (0/${totalResources} resources)...`
-          : 'Deleting cropped splats...',
+          ? `Deleting cropped splats (0/${totalResources} resources)...${readStreamHint}`
+          : `Deleting cropped splats...${readStreamHint}`,
       percent: totalResources > 0 ? 0 : 100,
       phase: 'crop',
       totalResources,
@@ -93,6 +96,7 @@ async function deleteSplatsInNormalizedSelections(
         completedResources: 0,
         onProgress,
         processedResourcePaths: new Set(),
+        tileReadStreamsClosed,
         totalResources,
       },
       resourceLocks: new Map(),

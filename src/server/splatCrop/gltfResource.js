@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { InspectorError } = require('../../errors');
+const { writeFileAtomic, writeJsonAtomic } = require('../fileUtils');
 const { normalizeMatrix4Array } = require('./normalize');
 
 const GLB_MAGIC = 0x46546c67;
@@ -38,18 +39,6 @@ function resolveLocalUri(baseDir, rootDir, uri, label) {
   const normalized = stripUriSuffix(uri);
   const resolvedPath = path.resolve(baseDir, normalized.replace(/\//g, path.sep));
   return assertPathInsideRoot(resolvedPath, rootDir, label);
-}
-
-function writeBytesAtomic(filePath, bytes) {
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tempPath, Buffer.from(bytes));
-  fs.renameSync(tempPath, filePath);
-}
-
-function writeJsonAtomic(filePath, value) {
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(value), 'utf8');
-  fs.renameSync(tempPath, filePath);
 }
 
 function parseGlb(filePath) {
@@ -372,16 +361,19 @@ function applyBufferReplacements(resource, bufferIndex, replacements) {
   return true;
 }
 
-function saveGltfResource(resource) {
-  resource.modifiedExternalBuffers.forEach((bufferIndex) => {
+async function saveGltfResource(resource) {
+  for (const bufferIndex of resource.modifiedExternalBuffers) {
     const record = resource.buffers[bufferIndex];
-    writeBytesAtomic(record.path, record.bytes);
-  });
+    await writeFileAtomic(record.path, Buffer.from(record.bytes));
+  }
 
   if (resource.type === 'glb') {
-    writeBytesAtomic(resource.filePath, buildGlb(resource.json, resource.embeddedBin));
+    await writeFileAtomic(
+      resource.filePath,
+      buildGlb(resource.json, resource.embeddedBin),
+    );
   } else {
-    writeJsonAtomic(resource.filePath, resource.json);
+    await writeJsonAtomic(resource.filePath, resource.json);
   }
 }
 
