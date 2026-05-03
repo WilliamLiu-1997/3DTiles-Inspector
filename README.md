@@ -10,7 +10,7 @@
 
 </div>
 
-`3dtiles-inspector` is a Node.js package and CLI for opening a local 3D Tiles tileset in a browser inspector, adjusting the root transform, tuning the effective geometric error scale, and saving the result back to disk.
+`3dtiles-inspector` is a Node.js package and CLI for opening a local 3D Tiles tileset in a browser inspector, adjusting the root transform, tuning geometric-error scaling, cropping supported 3D Gaussian Splat tilesets, and saving the result back to disk.
 
 Requires Node.js 18 or newer.
 
@@ -93,7 +93,7 @@ const {
 - `Geometric Error` scaling from `1/16x` to `16x`
 - `Layer Multiplier` scaling from `1/8x` to `8x` for each tile's geometric-error difference from the tileset's global leaf baseline
 - `Crop Regions` for drawing screen-space exclude regions on 3D Gaussian Splat tilesets
-- `Save` to persist the updated root transform and geometric-error scale back to disk
+- `Save` to persist root transform edits, geometric-error scaling, and confirmed crop regions back to disk
 
 ### Crop Regions
 
