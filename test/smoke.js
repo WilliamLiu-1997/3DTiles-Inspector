@@ -19,6 +19,47 @@ const IDENTITY_MATRIX4 = [
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 ];
 
+function assertClose(actual, expected, label) {
+  assert.ok(
+    Math.abs(actual - expected) < 0.02,
+    `${label}: expected ${expected}, received ${actual}`,
+  );
+}
+
+function assertVectorClose(actual, expected, label) {
+  expected.forEach((value, index) => {
+    assertClose(actual[index], value, `${label}[${index}]`);
+  });
+}
+
+function assertBoundingVolumeBox(
+  box,
+  expectedCenter,
+  expectedHalfSize,
+  label,
+  expectedHalfAxes = null,
+) {
+  assert.ok(Array.isArray(box), `${label}.box must be an array`);
+  assert.strictEqual(box.length, 12, `${label}.box must have 12 entries`);
+  assertVectorClose(box.slice(0, 3), expectedCenter, `${label}.center`);
+
+  const halfAxes = [
+    box.slice(3, 6),
+    box.slice(6, 9),
+    box.slice(9, 12),
+  ];
+  if (expectedHalfAxes) {
+    expectedHalfAxes.forEach((axis, index) => {
+      assertVectorClose(halfAxes[index], axis, `${label}.halfAxis[${index}]`);
+    });
+  }
+  expectedHalfSize.forEach((value, index) => {
+    const axis = halfAxes[index];
+    const length = Math.hypot(axis[0], axis[1], axis[2]);
+    assertClose(length, value, `${label}.halfAxis[${index}]`);
+  });
+}
+
 function createScreenSelectionPayload({
   action = 'exclude',
   planeMatrices = null,
@@ -116,6 +157,12 @@ async function assertCropSaveDeletesTwoSplats({ tilesetPath, readSpzBytes }) {
   const rewrittenTileset = JSON.parse(fs.readFileSync(tilesetPath, 'utf8'));
   assert.strictEqual(rewrittenTileset.geometricError, 20);
   assert.strictEqual(rewrittenTileset.root.geometricError, 20);
+  assertBoundingVolumeBox(
+    rewrittenTileset.root.boundingVolume.box,
+    [3, 0, 0],
+    [0, 0, 0],
+    'crop root boundingVolume',
+  );
 
   const centers = await readSpzCenters(readSpzBytes());
   assert.strictEqual(centers.length, 1);
@@ -148,6 +195,13 @@ async function assertScreenSelectionSaveDeletesTwoSplats({
   const centers = await readSpzCenters(readSpzBytes());
   assert.strictEqual(centers.length, 1);
   assert.ok(Math.abs(centers[0].x - 3) < 0.01);
+  const rewrittenTileset = JSON.parse(fs.readFileSync(tilesetPath, 'utf8'));
+  assertBoundingVolumeBox(
+    rewrittenTileset.root.boundingVolume.box,
+    [3, 0, 0],
+    [0, 0, 0],
+    'screen selection root boundingVolume',
+  );
 }
 
 async function assertScreenSelectionFarPlaneLimitsDepth({
@@ -178,6 +232,13 @@ async function assertScreenSelectionFarPlaneLimitsDepth({
   assert.strictEqual(centers.length, 1);
   assert.ok(Math.abs(centers[0].x) < 0.01);
   assert.ok(Math.abs(centers[0].z - 2) < 0.01);
+  const rewrittenTileset = JSON.parse(fs.readFileSync(tilesetPath, 'utf8'));
+  assertBoundingVolumeBox(
+    rewrittenTileset.root.boundingVolume.box,
+    [0, -2, 0],
+    [0, 0, 0],
+    'far-plane root boundingVolume',
+  );
 }
 
 async function assertCropSavePrunesFullyDeletedSplatTile(baseDir) {
@@ -251,6 +312,18 @@ async function assertCropSavePrunesFullyDeletedSplatTile(baseDir) {
   assert.strictEqual(
     rewrittenTileset.root.children[0].content.uri,
     'kept.gltf',
+  );
+  assertBoundingVolumeBox(
+    rewrittenTileset.root.boundingVolume.box,
+    [3, 0, 0],
+    [0, 0, 0],
+    'pruned root boundingVolume',
+  );
+  assertBoundingVolumeBox(
+    rewrittenTileset.root.children[0].boundingVolume.box,
+    [3, 0, 0],
+    [0, 0, 0],
+    'kept child boundingVolume',
   );
 
   const removedGltf = JSON.parse(fs.readFileSync(removedGltfPath, 'utf8'));
@@ -338,6 +411,94 @@ async function assertCropSaveRewritesMultipleBufferViews(baseDir) {
       Number(firstView.byteOffset || 0) + Number(firstView.byteLength),
   );
   assert.strictEqual(rewrittenGltf.buffers[0].byteLength, rewrittenBin.length);
+  const rewrittenTileset = JSON.parse(fs.readFileSync(tilesetPath, 'utf8'));
+  assertBoundingVolumeBox(
+    rewrittenTileset.root.boundingVolume.box,
+    [3.5, 0, 0],
+    [Math.SQRT1_2 / 2, Math.SQRT1_2 / 2, 0],
+    'multi-bufferView root boundingVolume',
+    [
+      [0.25, 0.25, 0],
+      [-0.25, 0.25, 0],
+      [0, 0, 0],
+    ],
+  );
+}
+
+async function assertCropSaveRewritesNestedTileset(baseDir) {
+  const nestedCropDir = path.join(baseDir, 'crop-nested');
+  const nestedDir = path.join(nestedCropDir, 'nested');
+  fs.mkdirSync(nestedDir, { recursive: true });
+
+  const spzBytes = await createSpzBytes([
+    [0, 0, 0],
+    [0.5, 0, 0],
+    [3, 0, 0],
+    [4, 0, 0],
+  ]);
+  const rootTilesetPath = path.join(nestedCropDir, 'tileset.json');
+  const nestedTilesetPath = path.join(nestedDir, 'tileset.json');
+  const nestedGltfPath = path.join(nestedDir, 'splats.gltf');
+  const nestedBinPath = path.join(nestedDir, 'splats.bin');
+
+  fs.writeFileSync(nestedBinPath, spzBytes);
+  fs.writeFileSync(
+    nestedGltfPath,
+    JSON.stringify(makeGaussianGltf('splats.bin', spzBytes.length)),
+    'utf8',
+  );
+  writeSplatTileset(rootTilesetPath, 'nested/tileset.json');
+  writeSplatTileset(nestedTilesetPath, 'splats.gltf');
+
+  const session = await api.startInspectorSession(rootTilesetPath, {
+    handleSignals: false,
+    openBrowser: false,
+  });
+  try {
+    const payload = await postSave(session.url, {
+      geometricErrorLayerScale: 1,
+      geometricErrorScale: 1,
+      splatScreenSelections: [createScreenSelectionPayload()],
+      transform: IDENTITY_MATRIX4,
+    });
+    assert.strictEqual(payload.deletedSplats, 2);
+    assert.strictEqual(payload.processedSplatResources, 1);
+  } finally {
+    await session.close();
+  }
+
+  const centers = await readSpzCenters(
+    readGltfBufferViewBytes(nestedGltfPath, nestedBinPath),
+  );
+  assert.strictEqual(centers.length, 2);
+  assert.ok(Math.abs(centers[0].x - 3) < 0.01);
+  assert.ok(Math.abs(centers[1].x - 4) < 0.01);
+
+  const rewrittenRootTileset = JSON.parse(
+    fs.readFileSync(rootTilesetPath, 'utf8'),
+  );
+  const rewrittenNestedTileset = JSON.parse(
+    fs.readFileSync(nestedTilesetPath, 'utf8'),
+  );
+  const expectedHalfAxes = [
+    [0.25, 0.25, 0],
+    [-0.25, 0.25, 0],
+    [0, 0, 0],
+  ];
+  assertBoundingVolumeBox(
+    rewrittenNestedTileset.root.boundingVolume.box,
+    [3.5, 0, 0],
+    [Math.SQRT1_2 / 2, Math.SQRT1_2 / 2, 0],
+    'nested child boundingVolume',
+    expectedHalfAxes,
+  );
+  assertBoundingVolumeBox(
+    rewrittenRootTileset.root.boundingVolume.box,
+    [3.5, 0, 0],
+    [Math.SQRT1_2 / 2, Math.SQRT1_2 / 2, 0],
+    'nested parent boundingVolume',
+    expectedHalfAxes,
+  );
 }
 
 async function main() {
@@ -496,6 +657,7 @@ async function main() {
     });
 
     await assertCropSaveRewritesMultipleBufferViews(tempDir);
+    await assertCropSaveRewritesNestedTileset(tempDir);
     await assertCropSavePrunesFullyDeletedSplatTile(tempDir);
 
     const screenCropDir = path.join(tempDir, 'crop-screen');

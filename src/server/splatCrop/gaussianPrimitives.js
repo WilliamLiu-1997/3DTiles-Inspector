@@ -36,7 +36,19 @@ function getRootUpRotationMatrix(THREE, tileset) {
   return matrix;
 }
 
-function collectGaussianPrimitiveDescriptors(THREE, json, tileSceneMatrix) {
+function primitiveHasGaussianSpzExtension(primitive) {
+  return (
+    primitive?.extensions?.KHR_gaussian_splatting?.extensions
+      ?.KHR_gaussian_splatting_compression_spz_2 != null
+  );
+}
+
+function collectGaussianPrimitiveDescriptors(
+  THREE,
+  json,
+  tileSceneMatrix,
+  tileProjectionMatrix = tileSceneMatrix,
+) {
   const descriptors = [];
   const nodes = Array.isArray(json.nodes) ? json.nodes : [];
   const meshes = Array.isArray(json.meshes) ? json.meshes : [];
@@ -46,7 +58,12 @@ function collectGaussianPrimitiveDescriptors(THREE, json, tileSceneMatrix) {
     ? scenes[sceneIndex].nodes
     : nodes.map((_, index) => index);
 
-  function visitNode(nodeIndex, parentMatrix, stack) {
+  function visitNode(
+    nodeIndex,
+    parentSceneMatrix,
+    parentProjectionMatrix,
+    stack,
+  ) {
     if (!Number.isInteger(nodeIndex) || nodeIndex < 0 || nodeIndex >= nodes.length) {
       return;
     }
@@ -60,8 +77,11 @@ function collectGaussianPrimitiveDescriptors(THREE, json, tileSceneMatrix) {
     }
 
     stack.add(nodeIndex);
-    const nodeWorldMatrix = getNodeLocalMatrix(THREE, node);
-    nodeWorldMatrix.premultiply(parentMatrix);
+    const nodeLocalMatrix = getNodeLocalMatrix(THREE, node);
+    const nodeWorldMatrix = nodeLocalMatrix.clone().premultiply(parentSceneMatrix);
+    const nodeProjectionMatrix = nodeLocalMatrix
+      .clone()
+      .premultiply(parentProjectionMatrix);
 
     if (Number.isInteger(node.mesh)) {
       const mesh = meshes[node.mesh];
@@ -86,6 +106,7 @@ function collectGaussianPrimitiveDescriptors(THREE, json, tileSceneMatrix) {
             bufferView,
             meshIndex: node.mesh,
             primitiveIndex,
+            sourceToProjectionMatrix: nodeProjectionMatrix.clone(),
             sourceToWorldMatrix: nodeWorldMatrix.clone(),
           });
         });
@@ -94,17 +115,55 @@ function collectGaussianPrimitiveDescriptors(THREE, json, tileSceneMatrix) {
 
     if (Array.isArray(node.children)) {
       node.children.forEach((childIndex) => {
-        visitNode(childIndex, nodeWorldMatrix, stack);
+        visitNode(childIndex, nodeWorldMatrix, nodeProjectionMatrix, stack);
       });
     }
     stack.delete(nodeIndex);
   }
 
   rootNodeIndices.forEach((nodeIndex) => {
-    visitNode(nodeIndex, tileSceneMatrix, new Set());
+    visitNode(nodeIndex, tileSceneMatrix, tileProjectionMatrix, new Set());
   });
 
   return descriptors;
+}
+
+function hasNonGaussianScenePrimitives(json) {
+  const nodes = Array.isArray(json.nodes) ? json.nodes : [];
+  const meshes = Array.isArray(json.meshes) ? json.meshes : [];
+  const scenes = Array.isArray(json.scenes) ? json.scenes : [];
+  const sceneIndex = Number.isInteger(json.scene) ? json.scene : 0;
+  const rootNodeIndices = Array.isArray(scenes[sceneIndex]?.nodes)
+    ? scenes[sceneIndex].nodes
+    : nodes.map((_, index) => index);
+  const visited = new Set();
+
+  function visitNode(nodeIndex) {
+    if (!Number.isInteger(nodeIndex) || nodeIndex < 0 || nodeIndex >= nodes.length) {
+      return false;
+    }
+    if (visited.has(nodeIndex)) {
+      return false;
+    }
+
+    visited.add(nodeIndex);
+    const node = nodes[nodeIndex];
+    const mesh = Number.isInteger(node?.mesh) ? meshes[node.mesh] : null;
+    if (
+      Array.isArray(mesh?.primitives) &&
+      mesh.primitives.some((primitive) => !primitiveHasGaussianSpzExtension(primitive))
+    ) {
+      return true;
+    }
+
+    if (!Array.isArray(node?.children)) {
+      return false;
+    }
+
+    return node.children.some(visitNode);
+  }
+
+  return rootNodeIndices.some(visitNode);
 }
 
 function hasScenePrimitives(json) {
@@ -183,7 +242,9 @@ function removeMeshPrimitives(resource, descriptors) {
 module.exports = {
   collectGaussianPrimitiveDescriptors,
   getRootUpRotationMatrix,
+  getTileLocalTransform,
   getTileWorldTransform,
+  hasNonGaussianScenePrimitives,
   hasScenePrimitives,
   removeMeshPrimitives,
 };

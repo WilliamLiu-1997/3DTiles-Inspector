@@ -73,6 +73,7 @@ class SplatCropWorkerPool {
     } else {
       const result = message.result || {};
       job.resolve({
+        bounds: result.bounds || null,
         bytes: result.bytes ? Buffer.from(result.bytes) : null,
         deleted: Number(result.deleted || 0),
         empty: !!result.empty,

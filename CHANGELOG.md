@@ -6,9 +6,18 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Added
+
+- Added `Crop Regions` for 3D Gaussian Splat tilesets, with screen-space rectangle selection, pending/confirmed region controls, preview overlays, and adjustable far-plane depth handles.
+- Added save-time Gaussian Splat cropping for supported local `.gltf` and `.glb` resources using `KHR_gaussian_splatting_compression_spz_2`, including multi-resource writes, multi-bufferView rewrites, empty tile pruning, and progress updates.
+- Added README documentation, a crop-region screenshot, and smoke-test fixtures for the 3DGS crop workflow.
+
 ### Changed
 
-- Refactored viewer controls into focused modules organized by crop selection, fly-to navigation, root transforms, set-position picking, transform modes, status/progress UI, and toolbar toggles.
+- Moved inspector session, HTTP server, save handling, viewer asset generation, and splat-crop logic into focused `src/server/` modules.
+- Refactored the browser viewer into focused DOM, IO, scene, navigation, screen-selection, and transform modules.
+- Updated the public `./session` export to `src/server/session.js` and routed the CLI through the package entrypoint.
+- Updated `3d-tiles-rendererjs-3dgs-plugin` from `0.1.4` to `0.1.5`.
 
 ## [0.1.8] - 2026-05-03
 

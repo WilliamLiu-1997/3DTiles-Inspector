@@ -5,6 +5,7 @@ const GLB_MAGIC = 0x46546c67;
 const GLB_VERSION = 2;
 const GLB_JSON_CHUNK_TYPE = 0x4e4f534a;
 const GLB_BIN_CHUNK_TYPE = 0x004e4942;
+const SQRT_HALF = Math.SQRT1_2;
 
 async function createSpzBytes(points) {
   const { SpzWriter } = await import('@sparkjsdev/spark');
@@ -155,6 +156,22 @@ function writeSplatTileset(tilesetPath, contentUri) {
       asset: { version: '1.1' },
       geometricError: 10,
       root: {
+        boundingVolume: {
+          box: [
+            0,
+            0,
+            0,
+            100 * SQRT_HALF,
+            100 * SQRT_HALF,
+            0,
+            -100 * SQRT_HALF,
+            100 * SQRT_HALF,
+            0,
+            0,
+            0,
+            100,
+          ],
+        },
         geometricError: 10,
         content: { uri: contentUri },
       },

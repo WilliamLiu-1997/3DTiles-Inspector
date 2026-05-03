@@ -119,18 +119,6 @@ If `build_summary.json` exists next to the root tileset, `Save` also updates:
 - `viewer_geometric_error_scale`
 - `viewer_geometric_error_layer_scale`
 
-## Package Surface
-
-- `src/index.js` exports the public Node API
-- `src/cli.js` implements the standalone CLI
-- `src/server/session.js` manages the local server, temporary assets, browser launch, and shutdown lifecycle
-- `src/server/saveTransform.js` and `src/server/splatCrop/` handle transform saves, geometric-error updates, and Gaussian Splat crop writes
-- `src/server/viewerAssets.js` and `src/server/viewerHtml.js` create the temporary viewer HTML and static asset directory
-- `src/viewer/app.js` contains the browser runtime source
-- `src/viewer/screenSelection/` contains the browser-side crop region selection and preview UI
-- `dist/inspector-assets/viewer/` contains the generated browser bundle and local decoder assets built by `npm run build:viewer`
-- `src/viewer/scene/cameraController.js` contains the vendored camera controller used by the runtime
-
 ## Development
 
 ```bash

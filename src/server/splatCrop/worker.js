@@ -207,6 +207,55 @@ function collectSurvivorIndices(
   return survivors;
 }
 
+function createBounds() {
+  return {
+    max: [-Infinity, -Infinity, -Infinity],
+    min: [Infinity, Infinity, Infinity],
+  };
+}
+
+function getProjectionMatrices(THREE, descriptors) {
+  return descriptors.map((descriptor) =>
+    new THREE.Matrix4().fromArray(
+      descriptor.sourceToProjectionMatrix ||
+        descriptor.sourceToWorldMatrix,
+    ),
+  );
+}
+
+function getSurvivorProjectedBounds(
+  THREE,
+  splatData,
+  survivors,
+  descriptors,
+) {
+  if (survivors.length === 0) {
+    return null;
+  }
+
+  const projectionMatrices = getProjectionMatrices(THREE, descriptors);
+  const bounds = createBounds();
+  const projected = new THREE.Vector3();
+  survivors.forEach((index) => {
+    projectionMatrices.forEach((matrix) => {
+      projected
+        .set(
+          splatData.centers[index * 3],
+          splatData.centers[index * 3 + 1],
+          splatData.centers[index * 3 + 2],
+        )
+        .applyMatrix4(matrix);
+      bounds.min[0] = Math.min(bounds.min[0], projected.x);
+      bounds.min[1] = Math.min(bounds.min[1], projected.y);
+      bounds.min[2] = Math.min(bounds.min[2], projected.z);
+      bounds.max[0] = Math.max(bounds.max[0], projected.x);
+      bounds.max[1] = Math.max(bounds.max[1], projected.y);
+      bounds.max[2] = Math.max(bounds.max[2], projected.z);
+    });
+  });
+  return bounds;
+}
+
 async function writeSurvivingSpzBytes(SpzWriter, spz, splatData, survivors) {
   const writer = new SpzWriter({
     numSplats: survivors.length,
@@ -288,14 +337,21 @@ async function rewriteSpzBytes({
     sourceToScreenSelections,
   );
   const deleted = spz.numSplats - survivors.length;
+  const bounds = getSurvivorProjectedBounds(
+    THREE,
+    splatData,
+    survivors,
+    descriptors,
+  );
   if (survivors.length === 0) {
-    return { bytes: null, deleted, empty: true };
+    return { bounds, bytes: null, deleted, empty: true };
   }
   if (deleted === 0) {
-    return { bytes: null, deleted: 0, empty: false };
+    return { bounds, bytes: null, deleted: 0, empty: false };
   }
 
   return {
+    bounds,
     bytes: await writeSurvivingSpzBytes(SpzWriter, spz, splatData, survivors),
     deleted,
     empty: false,
@@ -320,6 +376,7 @@ parentPort.on('message', async (message) => {
       {
         id: message.id,
         result: {
+          bounds: result.bounds,
           bytes,
           deleted: result.deleted,
           empty: result.empty,
