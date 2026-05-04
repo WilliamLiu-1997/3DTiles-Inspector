@@ -308,7 +308,8 @@ cropController = createCropController({
   transformControls,
   viewerElements,
   cancelOtherPositionPickModes: () => setPositionController.cancelMode(),
-  getCurrentRootTransformArray: () => rootTransform.getCurrentRootTransformArray(),
+  getCurrentRootTransformArray: () =>
+    rootTransform.getCurrentRootTransformArray(),
   getTilesetBoundingSphere,
 });
 
@@ -402,6 +403,7 @@ async function moveTilesToCoordinate() {
       coordinate.longitude,
       coordinate.height,
     );
+    flyTo.moveCameraToTiles();
     setStatus(
       'Moved tileset root to the specified coordinate using ENU orientation. Click Save to persist.',
     );
@@ -510,7 +512,8 @@ async function saveTransform() {
   );
 
   const currentMatrix = rootTransform.getCurrentMatrix();
-  const incrementalMatrix = rootTransform.getIncrementalSinceSaved(currentMatrix);
+  const incrementalMatrix =
+    rootTransform.getIncrementalSinceSaved(currentMatrix);
   const saveState = geometricError.getSaveState();
   let unlockSaveUi = true;
 

@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-05-05
+
+### Fixed
+
+- Fixed coordinate move actions leaving the camera at the previous view by flying back to the relocated tileset after the root transform is moved.
+- Fixed near-linear fly-to paths snapping to the start direction instead of interpolating toward the destination.
+
 ## [0.2.4] - 2026-05-04
 
 ### Added

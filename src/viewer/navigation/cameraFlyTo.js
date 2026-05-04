@@ -30,11 +30,7 @@ const _flyCameraRight = new Vector3();
 const _flyReferenceUp = new Vector3();
 const _flyReferenceRight = new Vector3();
 const _flyQuaternion = new Quaternion();
-const _ellipsoidRadii = new Vector3(
-  6378137.0,
-  6378137.0,
-  6356752.3142451793,
-);
+const _ellipsoidRadii = new Vector3(6378137.0, 6378137.0, 6356752.3142451793);
 const _oneOverRadiiSquared = new Vector3(
   1 / (_ellipsoidRadii.x * _ellipsoidRadii.x),
   1 / (_ellipsoidRadii.y * _ellipsoidRadii.y),
@@ -72,12 +68,7 @@ function eastNorthUpToFixedFrame(origin) {
   );
 }
 
-export function createCameraFlight(
-  camera,
-  position,
-  target,
-  options = {},
-) {
+export function createCameraFlight(camera, position, target, options = {}) {
   const duration = options.duration ?? 2500;
   const endPosition = position.clone();
   const endQuaternion = getEndQuaternion(endPosition, target, options);
@@ -98,11 +89,7 @@ export function createCameraFlight(
   });
 }
 
-export function createCameraPoseFlight(
-  camera,
-  position,
-  options,
-) {
+export function createCameraPoseFlight(camera, position, options) {
   const duration = options.duration ?? 2500;
   const endPosition = position.clone();
   const endQuaternion = getHeadingPitchRollQuaternion(
@@ -165,11 +152,7 @@ export function getFlyToParamsFromBoundingSphere(
   };
 }
 
-export function flyTo(
-  camera,
-  flight,
-  time,
-) {
+export function flyTo(camera, flight, time) {
   if (flight.startTime === null) {
     flight.startTime = time;
   }
@@ -227,7 +210,12 @@ function getFlyToPosition(flight, t) {
       .applyAxisAngle(_flyAxis, angle * t)
       .normalize();
   } else {
-    _flyDirection.copy(_flyDirectionStart);
+    _flyDirection.lerpVectors(_flyDirectionStart, _flyDirectionEnd, t);
+    if (_flyDirection.lengthSq() < 1e-12) {
+      _flyDirection.copy(_flyDirectionEnd);
+    } else {
+      _flyDirection.normalize();
+    }
   }
 
   const radius =
@@ -236,11 +224,7 @@ function getFlyToPosition(flight, t) {
   return _flyDirection.multiplyScalar(radius);
 }
 
-function getUprightInterpolatedQuaternion(
-  flight,
-  position,
-  t,
-) {
+function getUprightInterpolatedQuaternion(flight, position, t) {
   const heading = lerpAngle(flight.startHeading, flight.endHeading, t);
   const pitch = MathUtils.lerp(flight.startPitch, flight.endPitch, t);
   return getHeadingPitchRollQuaternion(position, heading, pitch, 0);
@@ -366,10 +350,7 @@ function getForwardFromQuaternion(quaternion, target) {
   return target.set(0, 0, -1).applyQuaternion(quaternion).normalize();
 }
 
-function getUprightHeadingPitchAtPose(
-  position,
-  quaternion,
-) {
+function getUprightHeadingPitchAtPose(position, quaternion) {
   if (isCenterModePosition(position)) {
     const forward = getForwardFromQuaternion(quaternion, _flyForward);
     _flyCameraRight.set(1, 0, 0).applyQuaternion(quaternion);
@@ -489,11 +470,7 @@ function getRollAtPose(position, quaternion) {
   );
 }
 
-function getEndQuaternion(
-  position,
-  target,
-  options,
-) {
+function getEndQuaternion(position, target, options) {
   const { heading, pitch, roll } = options;
   if (heading === undefined && pitch === undefined && roll === undefined) {
     return getLookAtQuaternion(position, target);
@@ -516,12 +493,7 @@ function getEndQuaternion(
   );
 }
 
-function getBoundingSphereFlyToPosition(
-  camera,
-  target,
-  range,
-  options,
-) {
+function getBoundingSphereFlyToPosition(camera, target, range, options) {
   const { heading, pitch } = options;
   if (heading === undefined && pitch === undefined) {
     const direction =
@@ -554,12 +526,7 @@ function getBoundingSphereFlyToPosition(
   return _flyDirection.copy(target).addScaledVector(forward, -range);
 }
 
-function getHeadingPitchRollQuaternion(
-  referencePoint,
-  heading,
-  pitch,
-  roll,
-) {
+function getHeadingPitchRollQuaternion(referencePoint, heading, pitch, roll) {
   if (isCenterModePosition(referencePoint)) {
     getCenterModeHeadingPitchRollBasis(heading, pitch, roll);
     _matrix1.makeBasis(_flyRight, _flyUp, _flyBackward);
@@ -575,11 +542,7 @@ function getHeadingPitchRollQuaternion(
   return new Quaternion().setFromRotationMatrix(_matrix1);
 }
 
-function getHeadingPitchRollForward(
-  referencePoint,
-  heading,
-  pitch,
-) {
+function getHeadingPitchRollForward(referencePoint, heading, pitch) {
   if (isCenterModePosition(referencePoint)) {
     return getCenterModeHeadingPitchRollForward(heading, pitch);
   }
@@ -604,30 +567,18 @@ function getHeadingPitchRollForward(
   return _flyForward;
 }
 
-function getCenterModeHeadingPitchRollForward(
-  heading,
-  pitch,
-) {
+function getCenterModeHeadingPitchRollForward(heading, pitch) {
   const cosPitch = Math.cos(pitch);
   const sinPitch = Math.sin(pitch);
   const cosHeading = Math.cos(heading);
   const sinHeading = Math.sin(heading);
 
-  _flyForward.set(
-    sinHeading * cosPitch,
-    cosHeading * cosPitch,
-    sinPitch,
-  );
+  _flyForward.set(sinHeading * cosPitch, cosHeading * cosPitch, sinPitch);
 
   return _flyForward.normalize();
 }
 
-function getHeadingPitchRollBasis(
-  referencePoint,
-  heading,
-  pitch,
-  roll,
-) {
+function getHeadingPitchRollBasis(referencePoint, heading, pitch, roll) {
   if (isCenterModePosition(referencePoint)) {
     getCenterModeHeadingPitchRollBasis(heading, pitch, roll);
     return;
@@ -650,11 +601,7 @@ function getHeadingPitchRollBasis(
   _flyBackward.copy(_flyForward).negate();
 }
 
-function getCenterModeHeadingPitchRollBasis(
-  heading,
-  pitch,
-  roll,
-) {
+function getCenterModeHeadingPitchRollBasis(heading, pitch, roll) {
   getCenterModeHeadingPitchRollForward(heading, pitch);
 
   _flyRight
@@ -683,13 +630,7 @@ function isCenterModePosition(position) {
   return position.lengthSq() <= CAMERA_CENTER_MODE_DISTANCE_SQ;
 }
 
-function getReferenceBasis(
-  forward,
-  east,
-  up,
-  rightTarget,
-  upTarget,
-) {
+function getReferenceBasis(forward, east, up, rightTarget, upTarget) {
   rightTarget.crossVectors(forward, up);
   if (rightTarget.lengthSq() < 1e-6) {
     rightTarget.copy(east).projectOnPlane(forward);
@@ -712,12 +653,7 @@ function lerpAngle(start, end, t) {
   return start + delta * t;
 }
 
-function applyFlyToPose(
-  camera,
-  position,
-  quaternion,
-  zoom = null,
-) {
+function applyFlyToPose(camera, position, quaternion, zoom = null) {
   camera.position.copy(position);
   camera.quaternion.copy(quaternion);
 
