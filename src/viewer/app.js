@@ -469,9 +469,13 @@ function loadTileset(url, { frameOnLoad = true } = {}) {
     if (framed) {
       return;
     }
-    if (flyTo.frameTileset()) {
+    if (
+      flyTo.frameTileset({
+        activeStatus: 'Framing tileset...',
+        doneStatus: 'Tileset ready.',
+      })
+    ) {
       framed = true;
-      setStatus('Tileset ready.');
     }
   };
 
@@ -602,6 +606,7 @@ loadTileset(TILESET_URL);
 
 function frame() {
   cameraController.update();
+  flyTo.update();
   rootTransform.flush();
   globeController.update();
   tiles?.update();

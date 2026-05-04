@@ -854,11 +854,11 @@ function buildViewerHtml(viewerConfig) {
             <div class="coordinate-actions">
               <button id="crop-screen-select" class="wide" type="button">Draw Region</button>
             </div>
-            <div id="crop-list" class="crop-list"></div>
             <div class="status-actions">
               <button id="crop-screen-confirm" type="button">Confirm</button>
               <button id="crop-screen-cancel" type="button">Cancel</button>
             </div>
+            <div id="crop-list" class="crop-list"></div>
           </div>
         </div>
         <div class="toolbar-section status-panel">

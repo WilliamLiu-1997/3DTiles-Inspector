@@ -6,6 +6,22 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-05-04
+
+### Added
+
+- Added smooth camera fly-to animations for tileset framing and coordinate navigation, including arced world-space paths, upright heading/pitch interpolation, and orthographic zoom support.
+
+### Changed
+
+- Changed the initial tileset framing and `Move to Tiles`/coordinate actions to animate the camera instead of snapping immediately.
+- Moved the crop region list below the crop confirm/cancel controls.
+- Reduced the viewer's initial camera distance and far plane.
+
+### Fixed
+
+- Fixed zooming out in center-mode views drifting away from the mouse anchor because globe zoom-out transitions were being applied to local coordinates.
+
 ## [0.2.3] - 2026-05-04
 
 ### Changed

@@ -6,10 +6,7 @@ import {
   Scene,
   WebGLRenderer,
 } from 'three';
-import {
-  SplatEdit,
-  SplatEditRgbaBlendMode,
-} from '@sparkjsdev/spark';
+import { SplatEdit, SplatEditRgbaBlendMode } from '@sparkjsdev/spark';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { CameraController } from './cameraController.js';
@@ -47,9 +44,9 @@ export function createViewerScene({
     60,
     window.innerWidth / window.innerHeight,
     1,
-    2e7,
+    1.2e7,
   );
-  camera.position.set(0, 0, 1.75e7);
+  camera.position.set(0, 0, 1.2e7);
   camera.updateMatrixWorld(true);
 
   const contentGroup = new Group();
