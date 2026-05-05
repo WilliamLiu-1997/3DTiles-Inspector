@@ -133,6 +133,11 @@ export function createFlyToController({
     return true;
   }
 
+  function cancelCameraFlight() {
+    activeCameraFlight = null;
+    activeCameraFlightStatus = '';
+  }
+
   async function applyTilesSetPositionFromPointerEvent(event) {
     const coordinate = pickCoordinateFromPointerEvent(event);
     if (!coordinate) {
@@ -204,6 +209,7 @@ export function createFlyToController({
 
   return {
     applyTilesSetPositionFromPointerEvent,
+    cancelCameraFlight,
     frameTileset,
     getActiveEllipsoid,
     moveCameraToCoordinate,

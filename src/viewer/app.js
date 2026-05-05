@@ -17,6 +17,7 @@ import { bindViewerEvents } from './dom/events.js';
 import { createViewerShutdownRequester } from './io/shutdown.js';
 import { createSetPositionController } from './io/setPositionController.js';
 import { createFlyToController } from './navigation/flyTo.js';
+import { createCameraUrlPoseController } from './navigation/cameraUrlPose.js';
 import { createCropController } from './screenSelection/cropController.js';
 import { createRootTransformController } from './transform/rootTransformController.js';
 import { createTransformModeController } from './transform/transformModeController.js';
@@ -267,6 +268,15 @@ const flyTo = createFlyToController({
     rootTransform.applyFromCoordinate(lat, lon, h),
   getTiles: () => tiles,
   getTilesetBoundingSphere,
+});
+
+const cameraUrlPose = createCameraUrlPoseController({
+  camera,
+  cameraController,
+  setStatus,
+});
+const appliedInitialCameraPose = cameraUrlPose.applyFromUrl({
+  showStatus: true,
 });
 
 setPositionController = createSetPositionController({
@@ -605,11 +615,21 @@ bindViewerEvents({
   setStatus,
 });
 
-loadTileset(TILESET_URL);
+window.addEventListener('popstate', () => {
+  if (cameraUrlPose.applyFromUrl({ showStatus: true })) {
+    flyTo.cancelCameraFlight();
+    cancelPositionPickModes();
+  }
+});
+window.addEventListener('pagehide', cameraUrlPose.flush);
+cameraController.addEventListener('finish', cameraUrlPose.flush);
+
+loadTileset(TILESET_URL, { frameOnLoad: !appliedInitialCameraPose });
 
 function frame() {
   cameraController.update();
   flyTo.update();
+  cameraUrlPose.update();
   rootTransform.flush();
   globeController.update();
   tiles?.update();

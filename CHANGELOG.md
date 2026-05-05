@@ -6,6 +6,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-05-05
+
+### Added
+
+- Added realtime `camerapose` URL synchronization so shared viewer URLs can restore the current camera pose.
+
 ## [0.2.5] - 2026-05-05
 
 ### Fixed
