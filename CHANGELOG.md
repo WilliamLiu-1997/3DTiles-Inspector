@@ -6,9 +6,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-05-10
+
 ### Changed
 
 - Changed crop saves to remove local orphaned Gaussian Splat `.glb` / `.gltf` resources and private external buffers after fully cropped content is pruned from the tileset.
+- Updated `3d-tiles-rendererjs-3dgs-plugin` from `0.1.5` to `0.1.7`.
 
 ### Fixed
 
