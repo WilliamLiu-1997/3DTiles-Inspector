@@ -6,6 +6,14 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Changed
+
+- Changed crop saves to remove local orphaned Gaussian Splat `.glb` / `.gltf` resources and private external buffers after fully cropped content is pruned from the tileset.
+
+### Fixed
+
+- Fixed cropped Gaussian Splat resources keeping stale glTF accessor counts after SPZ data is rewritten, which could make Cesium fail while generating splat textures.
+
 ## [0.2.6] - 2026-05-05
 
 ### Added

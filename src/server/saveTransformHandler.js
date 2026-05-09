@@ -23,6 +23,8 @@ function createSaveTransformResponsePayload(
     transform: saveResult.transform,
     geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
     geometricErrorScale: normalizedGeometricErrorScale,
+    deletedSplatFiles: saveResult.deletedSplatFiles,
+    failedSplatFileDeletes: saveResult.failedSplatFileDeletes,
     deletedSplats: saveResult.deletedSplats,
     processedSplatResources: saveResult.processedSplatResources,
   };

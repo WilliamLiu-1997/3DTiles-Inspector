@@ -6,6 +6,7 @@ const { assertPathInsideRoot } = require('./gltfResource');
 const { getRootUpRotationMatrix } = require('./gaussianPrimitives');
 const {
   collectCandidateSplatResources,
+  deleteOrphanedSplatResources,
   readTilesetJson,
   traverseTileset,
 } = require('./traversal');
@@ -35,6 +36,8 @@ async function deleteSplatsInNormalizedSelections(
   if (normalizedScreenSelections.length === 0) {
     return {
       deletedSplats: 0,
+      deletedSplatFiles: 0,
+      failedSplatFileDeletes: 0,
       processedSplatResources: 0,
     };
   }
@@ -45,11 +48,12 @@ async function deleteSplatsInNormalizedSelections(
 
   const { THREE } = await getSplatCropModules();
   const rootTileset = readTilesetJson(tilesetPath);
-  const totalResources = collectCandidateSplatResources({
+  const initialResourcePaths = collectCandidateSplatResources({
     rootDir,
     tileset: rootTileset,
     tilesetPath,
-  }).size;
+  });
+  const totalResources = initialResourcePaths.size;
   if (typeof onProgress === 'function') {
     const readStreamHint = tileReadStreamsClosed
       ? ' Tile read streams closed.'
@@ -77,7 +81,7 @@ async function deleteSplatsInNormalizedSelections(
   const workerPool = new SplatCropWorkerPool(SPLAT_CROP_WORKER_COUNT);
 
   try {
-    return await traverseTileset({
+    const traversalResult = await traverseTileset({
       THREE,
       tilesetPath,
       tileset: rootTileset,
@@ -102,6 +106,20 @@ async function deleteSplatsInNormalizedSelections(
       resourceLocks: new Map(),
       workerPool,
     });
+    const remainingResourcePaths = collectCandidateSplatResources({
+      rootDir,
+      tilesetPath,
+    });
+    const cleanupResult = await deleteOrphanedSplatResources({
+      initialResourcePaths,
+      remainingResourcePaths,
+      rootDir,
+    });
+    return {
+      ...traversalResult,
+      deletedSplatFiles: cleanupResult.deletedFiles.length,
+      failedSplatFileDeletes: cleanupResult.failedFiles.length,
+    };
   } finally {
     await workerPool.close();
   }

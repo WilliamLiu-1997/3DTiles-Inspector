@@ -239,6 +239,53 @@ function removeMeshPrimitives(resource, descriptors) {
   return removed;
 }
 
+function updateGaussianPrimitiveAccessorCounts(resource, descriptors, count) {
+  if (!Number.isInteger(count) || count < 0) {
+    throw new InspectorError('Gaussian accessor count must be a non-negative integer.');
+  }
+
+  const updatedAccessors = new Set();
+  descriptors.forEach((descriptor) => {
+    if (
+      !Number.isInteger(descriptor.meshIndex) ||
+      !Number.isInteger(descriptor.primitiveIndex)
+    ) {
+      return;
+    }
+
+    const primitive =
+      resource.json.meshes?.[descriptor.meshIndex]?.primitives?.[
+        descriptor.primitiveIndex
+      ];
+    const attributes = primitive?.attributes;
+    if (!attributes || typeof attributes !== 'object') {
+      return;
+    }
+
+    Object.values(attributes).forEach((accessorIndex) => {
+      if (
+        !Number.isInteger(accessorIndex) ||
+        accessorIndex < 0 ||
+        accessorIndex >= (resource.json.accessors?.length || 0)
+      ) {
+        return;
+      }
+
+      const accessor = resource.json.accessors[accessorIndex];
+      if (!accessor || typeof accessor !== 'object') {
+        return;
+      }
+
+      if (accessor.count !== count) {
+        accessor.count = count;
+        updatedAccessors.add(accessorIndex);
+      }
+    });
+  });
+
+  return updatedAccessors.size;
+}
+
 module.exports = {
   collectGaussianPrimitiveDescriptors,
   getRootUpRotationMatrix,
@@ -247,4 +294,5 @@ module.exports = {
   hasNonGaussianScenePrimitives,
   hasScenePrimitives,
   removeMeshPrimitives,
+  updateGaussianPrimitiveAccessorCounts,
 };

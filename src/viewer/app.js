@@ -550,10 +550,11 @@ async function saveTransform() {
       const processedSplatResources = Number(
         payload.processedSplatResources || 0,
       );
+      const deletedSplatFiles = Number(payload.deletedSplatFiles || 0);
       cropController.clearAll();
       loadTileset(TILESET_URL, { frameOnLoad: false });
       setStatus(
-        `Saved transform and deleted ${deletedSplats} cropped splats from ${processedSplatResources} splat resource${processedSplatResources === 1 ? '' : 's'}. Reloading tileset.`,
+        `Saved transform and deleted ${deletedSplats} cropped splats from ${processedSplatResources} splat resource${processedSplatResources === 1 ? '' : 's'}${deletedSplatFiles > 0 ? `, removing ${deletedSplatFiles} orphaned file${deletedSplatFiles === 1 ? '' : 's'}` : ''}. Reloading tileset.`,
       );
     } else {
       setStatus(

@@ -77,6 +77,8 @@ class SplatCropWorkerPool {
         bytes: result.bytes ? Buffer.from(result.bytes) : null,
         deleted: Number(result.deleted || 0),
         empty: !!result.empty,
+        splatCount: Number(result.splatCount || 0),
+        survivorCount: Number(result.survivorCount || 0),
       });
     }
 

@@ -20,6 +20,7 @@ const {
   hasNonGaussianScenePrimitives,
   hasScenePrimitives,
   removeMeshPrimitives,
+  updateGaussianPrimitiveAccessorCounts,
 } = require('./gaussianPrimitives');
 
 function getContentSlots(tile) {
@@ -399,6 +400,126 @@ function collectCandidateSplatResources({
   return resourcePaths;
 }
 
+function collectLocalGltfBufferPaths(filePath, rootDir) {
+  const bufferPaths = new Set();
+  if (path.extname(filePath).toLowerCase() !== '.gltf') {
+    return bufferPaths;
+  }
+  if (!fs.existsSync(filePath)) {
+    return bufferPaths;
+  }
+
+  const json = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  const buffers = Array.isArray(json.buffers) ? json.buffers : [];
+  const resourceDir = path.dirname(filePath);
+  buffers.forEach((buffer, index) => {
+    const uri = buffer?.uri;
+    if (
+      typeof uri !== 'string' ||
+      uri.length === 0 ||
+      /^data:/i.test(uri) ||
+      isRemoteOrProtocolUri(uri)
+    ) {
+      return;
+    }
+
+    bufferPaths.add(
+      resolveLocalUri(
+        resourceDir,
+        rootDir,
+        uri,
+        `${filePath}.buffers[${index}].uri`,
+      ),
+    );
+  });
+  return bufferPaths;
+}
+
+function collectReferencedGltfBufferPaths(resourcePaths, rootDir) {
+  const bufferPaths = new Set();
+  resourcePaths.forEach((resourcePath) => {
+    collectLocalGltfBufferPaths(resourcePath, rootDir).forEach((bufferPath) => {
+      bufferPaths.add(bufferPath);
+    });
+  });
+  return bufferPaths;
+}
+
+async function deleteFileIfSafe(filePath, rootDir) {
+  const resolvedPath = assertPathInsideRoot(
+    filePath,
+    rootDir,
+    'Orphaned splat resource path',
+  );
+  let stats;
+  try {
+    stats = await fs.promises.stat(resolvedPath);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return { deleted: false };
+    }
+    return {
+      deleted: false,
+      error: err && err.message ? err.message : String(err),
+    };
+  }
+
+  if (!stats.isFile()) {
+    return { deleted: false };
+  }
+
+  try {
+    await fs.promises.unlink(resolvedPath);
+    return { deleted: true };
+  } catch (err) {
+    return {
+      deleted: false,
+      error: err && err.message ? err.message : String(err),
+    };
+  }
+}
+
+async function deleteOrphanedSplatResources({
+  initialResourcePaths,
+  remainingResourcePaths,
+  rootDir,
+}) {
+  const remainingBuffers = collectReferencedGltfBufferPaths(
+    remainingResourcePaths,
+    rootDir,
+  );
+  const deletePaths = new Set();
+
+  initialResourcePaths.forEach((resourcePath) => {
+    if (remainingResourcePaths.has(resourcePath)) {
+      return;
+    }
+
+    deletePaths.add(resourcePath);
+    collectLocalGltfBufferPaths(resourcePath, rootDir).forEach((bufferPath) => {
+      if (
+        !remainingResourcePaths.has(bufferPath) &&
+        !remainingBuffers.has(bufferPath)
+      ) {
+        deletePaths.add(bufferPath);
+      }
+    });
+  });
+
+  const deletedFiles = [];
+  const failedFiles = [];
+  for (const filePath of deletePaths) {
+    const result = await deleteFileIfSafe(filePath, rootDir);
+    if (result.deleted) {
+      deletedFiles.push(filePath);
+    } else if (result.error) {
+      failedFiles.push({ error: result.error, filePath });
+    }
+  }
+
+  return { deletedFiles, failedFiles };
+}
+
 function markSplatResourceProgress(context, resourcePath) {
   const progress = context.progress;
   if (
@@ -472,6 +593,7 @@ async function processGltfResource({
   const resourceBounds = createBounds();
   let hasResourceBounds = false;
   let deletedSplats = 0;
+  let modified = false;
   const rewriteTasks = [];
 
   for (const [bufferViewIndex, viewDescriptors] of byBufferView) {
@@ -511,6 +633,14 @@ async function processGltfResource({
       emptyDescriptors.push(...viewDescriptors);
       continue;
     }
+    if (Number.isInteger(rewrite.survivorCount)) {
+      modified =
+        updateGaussianPrimitiveAccessorCounts(
+          resource,
+          viewDescriptors,
+          rewrite.survivorCount,
+        ) > 0 || modified;
+    }
     if (!rewrite.bytes) {
       continue;
     }
@@ -526,7 +656,6 @@ async function processGltfResource({
     });
   }
 
-  let modified = false;
   if (emptyDescriptors.length > 0) {
     modified = removeMeshPrimitives(resource, emptyDescriptors) > 0 || modified;
   }
@@ -948,6 +1077,7 @@ async function traverseTileset({
 
 module.exports = {
   collectCandidateSplatResources,
+  deleteOrphanedSplatResources,
   readTilesetJson,
   traverseTileset,
 };

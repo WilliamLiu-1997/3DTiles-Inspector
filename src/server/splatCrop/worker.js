@@ -344,10 +344,24 @@ async function rewriteSpzBytes({
     descriptors,
   );
   if (survivors.length === 0) {
-    return { bounds, bytes: null, deleted, empty: true };
+    return {
+      bounds,
+      bytes: null,
+      deleted,
+      empty: true,
+      splatCount: spz.numSplats,
+      survivorCount: 0,
+    };
   }
   if (deleted === 0) {
-    return { bounds, bytes: null, deleted: 0, empty: false };
+    return {
+      bounds,
+      bytes: null,
+      deleted: 0,
+      empty: false,
+      splatCount: spz.numSplats,
+      survivorCount: survivors.length,
+    };
   }
 
   return {
@@ -355,6 +369,8 @@ async function rewriteSpzBytes({
     bytes: await writeSurvivingSpzBytes(SpzWriter, spz, splatData, survivors),
     deleted,
     empty: false,
+    splatCount: spz.numSplats,
+    survivorCount: survivors.length,
   };
 }
 
@@ -380,6 +396,8 @@ parentPort.on('message', async (message) => {
           bytes,
           deleted: result.deleted,
           empty: result.empty,
+          splatCount: result.splatCount,
+          survivorCount: result.survivorCount,
         },
       },
       transferList,

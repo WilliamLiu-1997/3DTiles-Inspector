@@ -61,6 +61,35 @@ function assertBoundingVolumeBox(
   });
 }
 
+function addGaussianAccessors(gltf, count) {
+  gltf.accessors = [];
+  gltf.meshes[0].primitives.forEach((primitive) => {
+    const base = gltf.accessors.length;
+    gltf.accessors.push(
+      { componentType: 5126, count, type: 'VEC3' },
+      { componentType: 5121, count, normalized: true, type: 'VEC4' },
+      { componentType: 5126, count, type: 'VEC3' },
+      { componentType: 5126, count, type: 'VEC4' },
+      { componentType: 5126, count, normalized: true, type: 'SCALAR' },
+    );
+    primitive.attributes = {
+      POSITION: base,
+      COLOR_0: base + 1,
+      'KHR_gaussian_splatting:SCALE': base + 2,
+      'KHR_gaussian_splatting:ROTATION': base + 3,
+      'KHR_gaussian_splatting:OPACITY': base + 4,
+    };
+  });
+  return gltf;
+}
+
+function getGaussianAccessorCounts(gltf) {
+  const primitive = gltf.meshes[0].primitives[0];
+  return Object.values(primitive.attributes).map(
+    (accessorIndex) => gltf.accessors[accessorIndex].count,
+  );
+}
+
 async function pauseReadStreamAfterFirstChunk(filePath) {
   const stream = fs.createReadStream(filePath, { highWaterMark: 1 });
   const closed = new Promise((resolve, reject) => {
@@ -284,6 +313,43 @@ async function assertScreenSelectionFarPlaneLimitsDepth({
   );
 }
 
+async function assertCropSaveUpdatesAccessorCounts(baseDir) {
+  const accessorDir = path.join(baseDir, 'crop-accessor-counts');
+  fs.mkdirSync(accessorDir);
+
+  const spzBytes = await createSpzBytes([
+    [0, 0, 0],
+    [0.5, 0, 0],
+    [3, 0, 0],
+  ]);
+  const tilesetPath = path.join(accessorDir, 'tileset.json');
+  const gltfPath = path.join(accessorDir, 'splats.gltf');
+  const binPath = path.join(accessorDir, 'splats.bin');
+  fs.writeFileSync(binPath, spzBytes);
+  fs.writeFileSync(
+    gltfPath,
+    JSON.stringify(
+      addGaussianAccessors(makeGaussianGltf('splats.bin', spzBytes.length), 3),
+    ),
+    'utf8',
+  );
+  writeSplatTileset(tilesetPath, 'splats.gltf');
+
+  await assertCropSaveDeletesTwoSplats({
+    tilesetPath,
+    readSpzBytes: () => readGltfBufferViewBytes(gltfPath, binPath),
+  });
+
+  const rewrittenGltf = JSON.parse(fs.readFileSync(gltfPath, 'utf8'));
+  assert.deepStrictEqual(getGaussianAccessorCounts(rewrittenGltf), [
+    1,
+    1,
+    1,
+    1,
+    1,
+  ]);
+}
+
 async function assertCropSavePrunesFullyDeletedSplatTile(baseDir) {
   const pruneDir = path.join(baseDir, 'crop-prune');
   fs.mkdirSync(pruneDir);
@@ -345,6 +411,7 @@ async function assertCropSavePrunesFullyDeletedSplatTile(baseDir) {
       transform: IDENTITY_MATRIX4,
     });
     assert.strictEqual(payload.deletedSplats, 2);
+    assert.strictEqual(payload.deletedSplatFiles, 2);
     assert.strictEqual(payload.processedSplatResources, 2);
   } finally {
     await session.close();
@@ -369,11 +436,85 @@ async function assertCropSavePrunesFullyDeletedSplatTile(baseDir) {
     'kept child boundingVolume',
   );
 
-  const removedGltf = JSON.parse(fs.readFileSync(removedGltfPath, 'utf8'));
-  assert.strictEqual(removedGltf.meshes[0].primitives.length, 0);
+  assert.strictEqual(fs.existsSync(removedGltfPath), false);
+  assert.strictEqual(fs.existsSync(removedBinPath), false);
+  assert.strictEqual(fs.existsSync(keptGltfPath), true);
+  assert.strictEqual(fs.existsSync(keptBinPath), true);
 
   const keptBytes = readGltfBufferViewBytes(keptGltfPath, keptBinPath);
   const centers = await readSpzCenters(keptBytes);
+  assert.strictEqual(centers.length, 1);
+  assert.ok(Math.abs(centers[0].x - 3) < 0.01);
+}
+
+async function assertCropSaveDeletesFullyDeletedGlbFile(baseDir) {
+  const pruneDir = path.join(baseDir, 'crop-prune-glb');
+  fs.mkdirSync(pruneDir);
+
+  const removedSpzBytes = await createSpzBytes([
+    [0, 0, 0],
+    [0.5, 0, 0],
+  ]);
+  const keptSpzBytes = await createSpzBytes([[3, 0, 0]]);
+  const tilesetPath = path.join(pruneDir, 'tileset.json');
+  const removedGlbPath = path.join(pruneDir, 'removed.glb');
+  const keptGlbPath = path.join(pruneDir, 'kept.glb');
+
+  fs.writeFileSync(
+    removedGlbPath,
+    buildGlb(makeGaussianGltf(null, removedSpzBytes.length), removedSpzBytes),
+  );
+  fs.writeFileSync(
+    keptGlbPath,
+    buildGlb(makeGaussianGltf(null, keptSpzBytes.length), keptSpzBytes),
+  );
+  fs.writeFileSync(
+    tilesetPath,
+    JSON.stringify({
+      asset: { version: '1.1' },
+      geometricError: 10,
+      root: {
+        geometricError: 10,
+        children: [
+          {
+            content: { uri: 'removed.glb' },
+            geometricError: 5,
+          },
+          {
+            content: { uri: 'kept.glb' },
+            geometricError: 5,
+          },
+        ],
+      },
+    }),
+    'utf8',
+  );
+
+  const session = await api.startInspectorSession(tilesetPath, {
+    handleSignals: false,
+    openBrowser: false,
+  });
+  try {
+    const payload = await postSave(session.url, {
+      geometricErrorLayerScale: 1,
+      geometricErrorScale: 1,
+      splatScreenSelections: [createScreenSelectionPayload()],
+      transform: IDENTITY_MATRIX4,
+    });
+    assert.strictEqual(payload.deletedSplats, 2);
+    assert.strictEqual(payload.deletedSplatFiles, 1);
+    assert.strictEqual(payload.processedSplatResources, 2);
+  } finally {
+    await session.close();
+  }
+
+  const rewrittenTileset = JSON.parse(fs.readFileSync(tilesetPath, 'utf8'));
+  assert.strictEqual(rewrittenTileset.root.children.length, 1);
+  assert.strictEqual(rewrittenTileset.root.children[0].content.uri, 'kept.glb');
+  assert.strictEqual(fs.existsSync(removedGlbPath), false);
+  assert.strictEqual(fs.existsSync(keptGlbPath), true);
+
+  const centers = await readSpzCenters(readGlbBufferViewBytes(keptGlbPath));
   assert.strictEqual(centers.length, 1);
   assert.ok(Math.abs(centers[0].x - 3) < 0.01);
 }
@@ -704,6 +845,8 @@ async function main() {
     await assertCropSaveRewritesMultipleBufferViews(tempDir);
     await assertCropSaveRewritesNestedTileset(tempDir);
     await assertCropSavePrunesFullyDeletedSplatTile(tempDir);
+    await assertCropSaveDeletesFullyDeletedGlbFile(tempDir);
+    await assertCropSaveUpdatesAccessorCounts(tempDir);
 
     const screenCropDir = path.join(tempDir, 'crop-screen');
     fs.mkdirSync(screenCropDir);

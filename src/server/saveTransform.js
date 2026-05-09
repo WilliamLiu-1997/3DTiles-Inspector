@@ -471,6 +471,8 @@ async function saveViewerTransform(
   return {
     transform: nextRoot,
     deletedSplats: cropResult.deletedSplats,
+    deletedSplatFiles: cropResult.deletedSplatFiles,
+    failedSplatFileDeletes: cropResult.failedSplatFileDeletes,
     processedSplatResources: cropResult.processedSplatResources,
   };
 }
