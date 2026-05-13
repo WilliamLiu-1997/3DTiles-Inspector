@@ -1,10 +1,36 @@
 const path = require('path');
+const os = require('os');
 const { Worker } = require('worker_threads');
 
 const { InspectorError } = require('../../errors');
 
-const SPLAT_CROP_WORKER_COUNT = 4;
+const MAX_SPLAT_CROP_WORKER_COUNT = 8;
 const SPLAT_CROP_WORKER_PATH = path.join(__dirname, 'worker.js');
+
+function getAvailableParallelism() {
+  if (typeof os.availableParallelism === 'function') {
+    try {
+      const parallelism = os.availableParallelism();
+      if (Number.isFinite(parallelism) && parallelism > 0) {
+        return parallelism;
+      }
+    } catch (err) {
+      // Fall back to os.cpus() below.
+    }
+  }
+
+  const cpus = os.cpus();
+  return Array.isArray(cpus) && cpus.length > 0 ? cpus.length : 1;
+}
+
+function getDefaultSplatCropWorkerCount() {
+  return Math.min(
+    MAX_SPLAT_CROP_WORKER_COUNT,
+    Math.max(1, getAvailableParallelism() - 1),
+  );
+}
+
+const SPLAT_CROP_WORKER_COUNT = getDefaultSplatCropWorkerCount();
 
 function deserializeWorkerError(error) {
   const message =
@@ -74,7 +100,13 @@ class SplatCropWorkerPool {
       const result = message.result || {};
       job.resolve({
         bounds: result.bounds || null,
-        bytes: result.bytes ? Buffer.from(result.bytes) : null,
+        bytes: result.bytes
+          ? Buffer.from(
+              result.bytes.buffer,
+              result.bytes.byteOffset,
+              result.bytes.byteLength,
+            )
+          : null,
         deleted: Number(result.deleted || 0),
         empty: !!result.empty,
         splatCount: Number(result.splatCount || 0),
@@ -179,6 +211,7 @@ class SplatCropWorkerPool {
 }
 
 module.exports = {
+  getDefaultSplatCropWorkerCount,
   SPLAT_CROP_WORKER_COUNT,
   SplatCropWorkerPool,
 };

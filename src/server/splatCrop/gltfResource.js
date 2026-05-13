@@ -70,7 +70,7 @@ function parseGlb(filePath) {
     if (chunkType === GLB_JSON_CHUNK_TYPE) {
       json = JSON.parse(chunk.toString('utf8').replace(/\0+$/g, '').trimEnd());
     } else if (chunkType === GLB_BIN_CHUNK_TYPE && !bin) {
-      bin = Buffer.from(chunk);
+      bin = chunk;
     }
 
     offset = chunkEnd;
@@ -190,7 +190,7 @@ function loadResourceBuffer(resource, bufferIndex) {
         `${resource.filePath}.buffers[${bufferIndex}].uri`,
       );
       resource.dataUriMetadata.set(bufferIndex, metadata);
-      record = { bytes: Buffer.from(bytes), dataUri: true };
+      record = { bytes, dataUri: true };
     } else {
       const bufferPath = resolveLocalUri(
         path.dirname(resource.filePath),
@@ -205,7 +205,7 @@ function loadResourceBuffer(resource, bufferIndex) {
     }
   } else if (resource.type === 'glb' && bufferIndex === 0) {
     record = {
-      bytes: Buffer.from(resource.embeddedBin || Buffer.alloc(0)),
+      bytes: resource.embeddedBin || Buffer.alloc(0),
       embedded: true,
     };
   } else {
@@ -322,7 +322,7 @@ function applyBufferReplacements(resource, bufferIndex, replacements) {
 
   replacements.forEach((replacement) => {
     parts.push(record.bytes.subarray(cursor, replacement.start));
-    parts.push(Buffer.from(replacement.bytes));
+    parts.push(replacement.bytes);
     cursor = replacement.end;
   });
 

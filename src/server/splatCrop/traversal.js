@@ -22,6 +22,71 @@ const {
   removeMeshPrimitives,
   updateGaussianPrimitiveAccessorCounts,
 } = require('./gaussianPrimitives');
+const { SPLAT_CROP_WORKER_COUNT } = require('./workerPool');
+
+class AsyncLimiter {
+  constructor(limit) {
+    this.active = 0;
+    this.limit = normalizeConcurrency(limit);
+    this.queue = [];
+  }
+
+  run(task) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ reject, resolve, task });
+      this.dispatch();
+    });
+  }
+
+  dispatch() {
+    while (this.active < this.limit && this.queue.length > 0) {
+      const job = this.queue.shift();
+      this.active += 1;
+      Promise.resolve()
+        .then(job.task)
+        .then(job.resolve, job.reject)
+        .finally(() => {
+          this.active -= 1;
+          this.dispatch();
+        });
+    }
+  }
+}
+
+function normalizeConcurrency(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0
+    ? Math.max(1, Math.floor(number))
+    : 1;
+}
+
+function createAsyncLimiter(limit = SPLAT_CROP_WORKER_COUNT) {
+  return new AsyncLimiter(limit);
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return [];
+  }
+
+  const limit = normalizeConcurrency(concurrency);
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, () => worker()),
+  );
+  return results;
+}
 
 function getContentSlots(tile) {
   const slots = [];
@@ -594,36 +659,16 @@ async function processGltfResource({
   let hasResourceBounds = false;
   let deletedSplats = 0;
   let modified = false;
-  const rewriteTasks = [];
 
   for (const [bufferViewIndex, viewDescriptors] of byBufferView) {
     const slice = getBufferViewSlice(resource, bufferViewIndex);
-    rewriteTasks.push({
-      bufferViewIndex,
-      slice,
-      viewDescriptors,
-      promise: rewriteSpzBytesInWorker({
-        bytes: slice.bytes,
-        descriptors: viewDescriptors,
-        screenSelections,
-        workerPool,
-      }),
+    const rewrite = await rewriteSpzBytesInWorker({
+      bytes: slice.bytes,
+      descriptors: viewDescriptors,
+      screenSelections,
+      workerPool,
     });
-  }
 
-  const rewriteResults = await Promise.all(
-    rewriteTasks.map(async (task) => ({
-      ...task,
-      rewrite: await task.promise,
-    })),
-  );
-
-  for (const {
-    bufferViewIndex,
-    rewrite,
-    slice,
-    viewDescriptors,
-  } of rewriteResults) {
     deletedSplats += rewrite.deleted;
     if (rewrite.bounds) {
       hasResourceBounds =
@@ -766,11 +811,13 @@ async function processGltfContentSlot(
     context.resourceLocks,
     resourcePath,
     () =>
-      processLockedSplatResource(
-        context,
-        resourcePath,
-        tileSceneMatrix,
-        tileProjectionMatrix,
+      context.resourceLimiter.run(() =>
+        processLockedSplatResource(
+          context,
+          resourcePath,
+          tileSceneMatrix,
+          tileProjectionMatrix,
+        ),
       ),
   );
 
@@ -809,6 +856,8 @@ async function processNestedTilesetContentSlot(
     emptySplatResources: context.emptySplatResources,
     progress: context.progress,
     resourceLocks: context.resourceLocks,
+    resourceLimiter: context.resourceLimiter,
+    traversalConcurrency: context.traversalConcurrency,
     workerPool: context.workerPool,
   });
 
@@ -862,6 +911,14 @@ async function processContentSlot(context, slot, tileTransform, tileProjection) 
   return createContentSlotResult(slot, { boundsKnown: false });
 }
 
+async function processContentSlots(context, tile, tileTransform, tileProjection) {
+  return mapWithConcurrency(
+    getContentSlots(tile),
+    context.traversalConcurrency,
+    (slot) => processContentSlot(context, slot, tileTransform, tileProjection),
+  );
+}
+
 function applyContentResultsToTile(context, tile, contentResults) {
   const contentBounds = [];
   let boundsKnown = true;
@@ -893,16 +950,18 @@ async function pruneEmptyChildren(context, tile, tileTransform, tileProjection) 
     };
   }
 
-  const children = tile.children.slice();
-  const childResults = await Promise.all(
-    children.map(async (child) => ({
-      child,
-      result: await visitTilesetTile(context, child, tileTransform, false),
-    })),
-  );
   const childBounds = [];
   let boundsKnown = true;
   const keptChildren = [];
+  const childResults = await mapWithConcurrency(
+    tile.children,
+    context.traversalConcurrency,
+    async (child) => ({
+      child,
+      result: await visitTilesetTile(context, child, tileTransform, false),
+    }),
+  );
+
   childResults.forEach(({ child, result }) => {
     if (result.empty) {
       context.tilesetModified = true;
@@ -960,10 +1019,11 @@ async function visitTilesetTile(context, tile, inheritedTransform, isRootTile) {
     isRootTile,
   );
   const tileProjection = getTileProjection(context.THREE, tile);
-  const contentResults = await Promise.all(
-    getContentSlots(tile).map((slot) =>
-      processContentSlot(context, slot, worldTransform, tileProjection),
-    ),
+  const contentResults = await processContentSlots(
+    context,
+    tile,
+    worldTransform,
+    tileProjection,
   );
 
   const contentSummary = applyContentResultsToTile(context, tile, contentResults);
@@ -1016,6 +1076,8 @@ async function traverseTileset({
   emptySplatResources,
   progress,
   resourceLocks,
+  resourceLimiter = null,
+  traversalConcurrency = SPLAT_CROP_WORKER_COUNT,
   workerPool,
 }) {
   const resolvedTilesetPath = assertPathInsideRoot(
@@ -1039,6 +1101,8 @@ async function traverseTileset({
     throw new InspectorError(`${resolvedTilesetPath} must contain a root object.`);
   }
 
+  const normalizedTraversalConcurrency =
+    normalizeConcurrency(traversalConcurrency);
   const context = {
     THREE,
     deletedSplats: 0,
@@ -1047,11 +1111,14 @@ async function traverseTileset({
     processedResources,
     processedSplatResources: 0,
     resourceLocks,
+    resourceLimiter:
+      resourceLimiter || createAsyncLimiter(normalizedTraversalConcurrency),
     rootDir,
     rootTransform,
     screenSelections,
     tilesetDir: path.dirname(resolvedTilesetPath),
     tilesetModified: false,
+    traversalConcurrency: normalizedTraversalConcurrency,
     upRotationMatrix,
     visitedTilesets,
     workerPool,

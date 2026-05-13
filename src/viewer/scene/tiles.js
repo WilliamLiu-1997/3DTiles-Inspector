@@ -100,8 +100,8 @@ export function createTerrainGlobeTiles(options) {
 function createGeometricErrorLayerScalePlugin(preprocessNode) {
   return {
     name: 'GeometricErrorLayerScalePlugin',
-    preprocessNode(tile) {
-      preprocessNode(tile);
+    preprocessNode(tile, tilesetDir, parentTile) {
+      preprocessNode(tile, null, parentTile);
     },
   };
 }

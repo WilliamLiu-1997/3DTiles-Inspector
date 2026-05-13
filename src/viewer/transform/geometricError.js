@@ -21,6 +21,9 @@ export function createGeometricErrorController({
   getTiles,
 }) {
   const originalTileGeometricErrors = new WeakMap();
+  let knownTileChildCounts = new WeakMap();
+  let cachedGlobalLeafGeometricError = null;
+  let cachedGlobalLeafGeometricErrorRoot = null;
   let geometricErrorScaleExponent = 0;
   let geometricErrorScale = 1;
   let lastSavedGeometricErrorScale = 1;
@@ -34,6 +37,51 @@ export function createGeometricErrorController({
 
   function getEffectiveGeometricErrorLayerScale() {
     return lastSavedGeometricErrorLayerScale * geometricErrorLayerScale;
+  }
+
+  function getTilesRoot() {
+    return getTiles()?.root || null;
+  }
+
+  function getCachedGlobalLeafGeometricError() {
+    const root = getTilesRoot();
+    if (cachedGlobalLeafGeometricErrorRoot !== root) {
+      cachedGlobalLeafGeometricErrorRoot = root;
+      cachedGlobalLeafGeometricError = null;
+      knownTileChildCounts = new WeakMap();
+    }
+    return cachedGlobalLeafGeometricError;
+  }
+
+  function setCachedGlobalLeafGeometricError(leafGeometricError) {
+    cachedGlobalLeafGeometricErrorRoot = getTilesRoot();
+    cachedGlobalLeafGeometricError = leafGeometricError;
+  }
+
+  function clearCachedGlobalLeafGeometricError() {
+    cachedGlobalLeafGeometricError = null;
+  }
+
+  function trackTileChildCount(tile, children) {
+    knownTileChildCounts.set(tile, children.length);
+  }
+
+  function invalidateLeafCacheIfParentChildrenChanged(parentTile) {
+    if (!parentTile || typeof parentTile !== 'object') {
+      return;
+    }
+
+    const children = Array.isArray(parentTile.children)
+      ? parentTile.children
+      : [];
+    const knownChildCount = knownTileChildCounts.get(parentTile);
+    if (
+      cachedGlobalLeafGeometricError !== null &&
+      knownChildCount !== children.length
+    ) {
+      clearCachedGlobalLeafGeometricError();
+    }
+    trackTileChildCount(parentTile, children);
   }
 
   function updateTilesetErrorTarget() {
@@ -87,6 +135,7 @@ export function createGeometricErrorController({
     visited.add(tile);
     let leafGeometricError = null;
     const children = Array.isArray(tile.children) ? tile.children : [];
+    trackTileChildCount(tile, children);
     for (const child of children) {
       const childLeafGeometricError = getKnownTileLeafGeometricError(
         child,
@@ -105,37 +154,69 @@ export function createGeometricErrorController({
       : leafGeometricError;
   }
 
-  function getGlobalTileLeafGeometricError(tile) {
+  function getGlobalTileLeafGeometricError(tile, { forceRefresh = false } = {}) {
+    if (!forceRefresh) {
+      const cachedLeafGeometricError = getCachedGlobalLeafGeometricError();
+      if (cachedLeafGeometricError !== null) {
+        return cachedLeafGeometricError;
+      }
+    }
+
     const tiles = getTiles();
     const rootLeafGeometricError = tiles?.root
       ? getKnownTileLeafGeometricError(tiles.root)
       : null;
-    const tileLeafGeometricError = getKnownTileLeafGeometricError(tile);
 
-    if (rootLeafGeometricError === null) {
-      return tileLeafGeometricError;
-    }
-
-    if (tileLeafGeometricError === null) {
+    if (tiles?.root && tile === tiles.root) {
+      setCachedGlobalLeafGeometricError(rootLeafGeometricError);
       return rootLeafGeometricError;
     }
 
-    return Math.min(rootLeafGeometricError, tileLeafGeometricError);
+    const tileLeafGeometricError = getKnownTileLeafGeometricError(tile);
+    let leafGeometricError = null;
+
+    if (rootLeafGeometricError === null) {
+      leafGeometricError = tileLeafGeometricError;
+    } else if (tileLeafGeometricError === null) {
+      leafGeometricError = rootLeafGeometricError;
+    } else {
+      leafGeometricError = Math.min(
+        rootLeafGeometricError,
+        tileLeafGeometricError,
+      );
+    }
+
+    setCachedGlobalLeafGeometricError(leafGeometricError);
+    return leafGeometricError;
   }
 
   function applyLayerScaleToTile(
     tile,
-    leafGeometricError = getGlobalTileLeafGeometricError(tile),
+    leafGeometricError = null,
+    parentTile = null,
   ) {
+    invalidateLeafCacheIfParentChildrenChanged(parentTile);
+
     const originalGeometricError = getOriginalTileGeometricError(tile);
-    if (originalGeometricError === null || leafGeometricError === null) {
+    if (originalGeometricError === null) {
+      return;
+    }
+
+    const layerScale = getEffectiveGeometricErrorLayerScale();
+    if (layerScale === 1) {
+      tile.geometricError = originalGeometricError;
+      return;
+    }
+
+    const effectiveLeafGeometricError =
+      leafGeometricError ?? getGlobalTileLeafGeometricError(tile);
+    if (effectiveLeafGeometricError === null) {
       return;
     }
 
     tile.geometricError =
-      leafGeometricError +
-      (originalGeometricError - leafGeometricError) *
-        getEffectiveGeometricErrorLayerScale();
+      effectiveLeafGeometricError +
+      (originalGeometricError - effectiveLeafGeometricError) * layerScale;
   }
 
   function applyLayerScaleToTileset() {
@@ -144,7 +225,11 @@ export function createGeometricErrorController({
       return;
     }
 
-    const leafGeometricError = getGlobalTileLeafGeometricError(tiles.root);
+    const layerScale = getEffectiveGeometricErrorLayerScale();
+    const leafGeometricError =
+      layerScale === 1
+        ? null
+        : getGlobalTileLeafGeometricError(tiles.root, { forceRefresh: true });
     tiles.traverse(
       (tile) => {
         applyLayerScaleToTile(tile, leafGeometricError);

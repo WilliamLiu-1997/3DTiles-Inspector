@@ -7,6 +7,16 @@ const { spawnSync } = require('child_process');
 const api = require('../src');
 const { writeFileAtomic } = require('../src/server/fileUtils');
 const {
+  getRootUpRotationMatrix,
+} = require('../src/server/splatCrop/gaussianPrimitives');
+const {
+  readTilesetJson,
+  traverseTileset,
+} = require('../src/server/splatCrop/traversal');
+const {
+  SPLAT_CROP_WORKER_COUNT,
+} = require('../src/server/splatCrop/workerPool');
+const {
   buildGlb,
   createSpzBytes,
   makeGaussianGltf,
@@ -685,6 +695,116 @@ async function assertCropSaveRewritesNestedTileset(baseDir) {
   );
 }
 
+async function assertCropTraversalLimitsResourceConcurrency(baseDir) {
+  const serialDir = path.join(baseDir, 'crop-limited-traversal');
+  fs.mkdirSync(serialDir);
+
+  const resourceCount = SPLAT_CROP_WORKER_COUNT + 4;
+  const children = [
+    {
+      contents: [{ uri: 'splats-0.gltf' }, { uri: 'splats-1.gltf' }],
+      geometricError: 5,
+    },
+  ];
+  for (let index = 2; index < resourceCount; index++) {
+    children.push({
+      content: { uri: `splats-${index}.gltf` },
+      geometricError: 5,
+    });
+  }
+
+  for (let index = 0; index < resourceCount; index++) {
+    const byteLength = index === 0 ? 8 : 4;
+    const bufferViews =
+      index === 0
+        ? [
+            { buffer: 0, byteOffset: 0, byteLength: 4 },
+            { buffer: 0, byteOffset: 4, byteLength: 4 },
+          ]
+        : null;
+    fs.writeFileSync(
+      path.join(serialDir, `splats-${index}.bin`),
+      Buffer.alloc(byteLength),
+    );
+    fs.writeFileSync(
+      path.join(serialDir, `splats-${index}.gltf`),
+      JSON.stringify(
+        makeGaussianGltf(`splats-${index}.bin`, byteLength, bufferViews),
+      ),
+      'utf8',
+    );
+  }
+
+  const tilesetPath = path.join(serialDir, 'tileset.json');
+  fs.writeFileSync(
+    tilesetPath,
+    JSON.stringify({
+      asset: { version: '1.1' },
+      geometricError: 10,
+      root: {
+        children,
+        geometricError: 10,
+      },
+    }),
+    'utf8',
+  );
+
+  const THREE = await import('three');
+  const tileset = readTilesetJson(tilesetPath);
+  let activeRuns = 0;
+  let maxActiveRuns = 0;
+  let runCount = 0;
+  const workerPool = {
+    run() {
+      runCount += 1;
+      activeRuns += 1;
+      maxActiveRuns = Math.max(maxActiveRuns, activeRuns);
+      const callIndex = runCount;
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          activeRuns -= 1;
+          resolve({
+            bounds: {
+              max: [callIndex, 0, 0],
+              min: [callIndex, 0, 0],
+            },
+            bytes: null,
+            deleted: 0,
+            empty: false,
+            survivorCount: 1,
+          });
+        }, 5);
+      });
+    },
+  };
+
+  await traverseTileset({
+    THREE,
+    tilesetPath,
+    tileset,
+    rootDir: serialDir,
+    upRotationMatrix: getRootUpRotationMatrix(THREE, tileset),
+    rootTransform: IDENTITY_MATRIX4,
+    screenSelections: [createScreenSelectionPayload()],
+    parentTransform: null,
+    visitedTilesets: new Set(),
+    processedResources: new Set(),
+    emptySplatResources: new Map(),
+    progress: {
+      completedResources: 0,
+      onProgress: null,
+      processedResourcePaths: new Set(),
+      tileReadStreamsClosed: false,
+      totalResources: resourceCount,
+    },
+    resourceLocks: new Map(),
+    workerPool,
+  });
+
+  assert.strictEqual(runCount, resourceCount + 1);
+  assert.strictEqual(maxActiveRuns, SPLAT_CROP_WORKER_COUNT);
+}
+
 async function main() {
   assert.strictEqual(typeof api.InspectorError, 'function');
   assert.strictEqual(typeof api.startInspectorSession, 'function');
@@ -847,6 +967,7 @@ async function main() {
     await assertCropSavePrunesFullyDeletedSplatTile(tempDir);
     await assertCropSaveDeletesFullyDeletedGlbFile(tempDir);
     await assertCropSaveUpdatesAccessorCounts(tempDir);
+    await assertCropTraversalLimitsResourceConcurrency(tempDir);
 
     const screenCropDir = path.join(tempDir, 'crop-screen');
     fs.mkdirSync(screenCropDir);

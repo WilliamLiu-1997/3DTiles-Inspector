@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-05-13
+
+### Fixed
+
+- Fixed save-time crop memory spikes on large tilesets by limiting concurrent Gaussian Splat resource processing based on CPU parallelism, capped at 8 workers.
+- Fixed viewer stalls when many tiles are loaded by avoiding repeated tileset-wide leaf geometric-error scans during tile preprocessing.
+
 ## [0.2.7] - 2026-05-10
 
 ### Changed
