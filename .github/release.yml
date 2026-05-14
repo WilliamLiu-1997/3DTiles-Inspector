@@ -21,6 +21,4 @@ changelog:
         - refactor
 change-template: "- $TITLE (#$NUMBER) by @$AUTHOR"
 template: |
-  ## What's Changed
-
-  $CHANGES
+  **Full Changelog**: https://github.com/WilliamLiu-1997/3DTiles-Inspector/compare/$PREVIOUS_TAG...$TAG

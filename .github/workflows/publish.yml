@@ -71,13 +71,62 @@ jobs:
         if: ${{ steps.state.outputs.already_published == 'true' }}
         run: echo "Version ${{ steps.state.outputs.package_version }} is already on npm. Skipping npm publish."
 
+      - name: Build release changelog notes
+        id: changelog
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          section_file="${RUNNER_TEMP}/release-changelog-section.md"
+          notes_file="${RUNNER_TEMP}/release-changelog.md"
+
+          extract_version_section() {
+            local version_heading="$1"
+            local output_file="$2"
+
+            awk -v version_heading="${version_heading}" '
+              index($0, "## [" version_heading "]") == 1 {
+                capture = 1
+                next
+              }
+              capture && /^## \[/ {
+                exit
+              }
+              capture {
+                print
+              }
+            ' CHANGELOG.md > "${output_file}"
+          }
+
+          has_content() {
+            grep -q '[^[:space:]]' "$1"
+          }
+
+          extract_version_section "${version}" "${section_file}"
+          if ! has_content "${section_file}"; then
+            extract_version_section "Unreleased" "${section_file}"
+          fi
+
+          if has_content "${section_file}"; then
+            {
+              echo "## Changelog"
+              echo
+              awk 'NF { seen = 1 } seen { print }' "${section_file}"
+              echo
+            } > "${notes_file}"
+          else
+            echo "No CHANGELOG.md entry found for ${GITHUB_REF_NAME} or Unreleased."
+            : > "${notes_file}"
+          fi
+          echo "notes_file=${notes_file}" >> "${GITHUB_OUTPUT}"
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          CHANGELOG_NOTES_FILE: ${{ steps.changelog.outputs.notes_file }}
         shell: bash
         run: |
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             echo "Release ${GITHUB_REF_NAME} already exists."
           else
-            gh release create "${GITHUB_REF_NAME}" --generate-notes --latest
+            gh release create "${GITHUB_REF_NAME}" --notes-file "${CHANGELOG_NOTES_FILE}" --latest
           fi
