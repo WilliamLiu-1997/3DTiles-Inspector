@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed globe zoom-out near the horizon drifting away from the zoom anchor or moving the camera below the ellipsoid surface.
+
 ## [0.2.8] - 2026-05-13
 
 ### Fixed

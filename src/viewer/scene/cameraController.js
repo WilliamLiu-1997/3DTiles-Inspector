@@ -57,7 +57,6 @@ class PointerTracker {
     }
   }
   setHoverEvent(e) {
-    // @ts-expect-error
     if (e.pointerType === 'mouse' || e.type === 'wheel') {
       this.getAdjustedPointer(e, this.hoverPosition);
       this.hoverSet = true;
@@ -83,7 +82,6 @@ class PointerTracker {
     target.set(x, y);
   }
   addPointer(e) {
-    // @ts-expect-error
     const id = e.pointerId;
     const position = new Vector2();
     this.getAdjustedPointer(e, position);
@@ -94,13 +92,11 @@ class PointerTracker {
     this.previousPositions[id] = position.clone();
     this.startPositions[id] = position.clone();
     if (this.getPointerCount() === 1) {
-      // @ts-expect-error
       this.pointerType = e.pointerType;
       this.buttons = e.buttons;
     }
   }
   updatePointer(e) {
-    // @ts-expect-error
     const id = e.pointerId;
     if (!(id in this.pointerPositions)) {
       return false;
@@ -299,15 +295,11 @@ function setRaycasterFromCamera(raycaster, coords, camera) {
   // get the origin and direction of the frustum ray
   origin.set(coords.x, coords.y, nearZ).unproject(camera);
   direction.set(coords.x, coords.y, farZ).unproject(camera).sub(origin);
-  // @ts-expect-error
   if (!raycaster.isRay) {
     // compute the far value based on the distance from point on the near
     // plane and point on the far plane. Then normalize the direction.
-    // @ts-expect-error
     raycaster.near = 0;
-    // @ts-expect-error
     raycaster.far = direction.length();
-    // @ts-expect-error
     raycaster.camera = camera;
   }
   // normalize the ray direction
@@ -338,8 +330,6 @@ const MAX = 1e8;
 const PIVOT_SIZE = 22;
 const PIVOT_THICKNESS = 2.5;
 const VIRTUAL_HIT_DISTANCE = 50;
-const ZOOM_OUT_TRANSITION_COS_THRESHOLD = Math.cos((105 * Math.PI) / 180);
-const ZOOM_OUT_TRANSITION_COS_MAX_THRESHOLD = Math.cos((95 * Math.PI) / 180);
 const _pointer = new Vector2();
 const _pointer1 = new Vector2();
 const _pointer2 = new Vector2();
@@ -364,7 +354,9 @@ const _invMatrix = new Matrix4();
 const _quaternion = new Quaternion();
 const _plane = new Plane();
 const _ray = new Ray();
-const _zoomOutMetrics = { distanceScale: 1, transitionWeight: 0 };
+const _zoomOutMetrics = { distanceScale: 1 };
+const _fixedPointSurface = new Vector3();
+const _fixedPointNormal = new Vector3();
 class CameraController extends EventDispatcher {
   enableDamping;
   dampingFactor;
@@ -807,9 +799,7 @@ class CameraController extends EventDispatcher {
       return;
     }
     this.#pointerTracker.setHoverEvent(e);
-    if (!this.#pointerTracker.updatePointer(e)) {
-      return;
-    }
+    this.#pointerTracker.updatePointer(e);
   };
   #pointerUp = (e) => {
     this.#pointerTracker.deletePointer(e);
@@ -1090,16 +1080,41 @@ class CameraController extends EventDispatcher {
     this.#camera.updateMatrixWorld();
     _invMatrix.copy(this.#camera.matrixWorld).invert();
     _vec1.copy(fixedPoint).applyMatrix4(_invMatrix);
+    let clampToGlobeHorizon = false;
+    if (this.#ellipsoid && !this.#isCameraCenterMode()) {
+      const surfacePoint = this.#ellipsoid.getPositionToSurfacePoint(
+        fixedPoint,
+        _fixedPointSurface,
+      );
+      if (surfacePoint) {
+        this.#ellipsoid.getPositionToNormal(
+          _fixedPointSurface,
+          _fixedPointNormal,
+        );
+        clampToGlobeHorizon =
+          _fixedPointNormal.lengthSq() > THRESHOLD * THRESHOLD;
+      }
+    }
     this.#keepCameraUp();
     this.#camera.updateMatrixWorld();
     _vec2.copy(_vec1).applyMatrix4(this.#camera.matrixWorld);
-    this.#camera.position.add(_vec3.subVectors(fixedPoint, _vec2));
+    _vec3.subVectors(fixedPoint, _vec2);
+    if (clampToGlobeHorizon) {
+      _vec4.copy(this.#camera.position).add(_vec3);
+      const candidateClearance = _vec5
+        .subVectors(_vec4, _fixedPointSurface)
+        .dot(_fixedPointNormal);
+
+      if (candidateClearance < 0) {
+        return;
+      }
+    }
+    this.#camera.position.add(_vec3);
   }
-  #getZoomOutMetrics(source, hit, baseScale = 1) {
+  #getZoomOutMetrics(source, baseScale = 1) {
     const metrics = _zoomOutMetrics;
     const minScale = 0;
     metrics.distanceScale = baseScale;
-    metrics.transitionWeight = 0;
     if (!this.#ellipsoid || this.#isCameraCenterMode()) {
       return metrics;
     }
@@ -1115,30 +1130,6 @@ class CameraController extends EventDispatcher {
         metrics.distanceScale = minScale + (baseScale - minScale) * factor;
       }
     }
-    if (!hit || hit.virtual) {
-      return metrics;
-    }
-    const distanceASquared = hit.point.distanceToSquared(source);
-    const distanceBSquared = hit.point.lengthSq();
-    const distanceCSquared = source.lengthSq();
-    const denominator =
-      2 * Math.sqrt(distanceASquared) * Math.sqrt(distanceBSquared);
-    if (denominator <= THRESHOLD) {
-      return metrics;
-    }
-    const angleCos =
-      (distanceASquared + distanceBSquared - distanceCSquared) / denominator;
-    if (angleCos <= ZOOM_OUT_TRANSITION_COS_THRESHOLD) {
-      return metrics;
-    }
-    if (angleCos >= ZOOM_OUT_TRANSITION_COS_MAX_THRESHOLD) {
-      metrics.transitionWeight = 1;
-      return metrics;
-    }
-    metrics.transitionWeight =
-      (angleCos - ZOOM_OUT_TRANSITION_COS_THRESHOLD) /
-      (ZOOM_OUT_TRANSITION_COS_MAX_THRESHOLD -
-        ZOOM_OUT_TRANSITION_COS_THRESHOLD);
     return metrics;
   }
   #getScaledZoomTarget(hit, zoomFactor, source, distanceScale, target) {
@@ -1148,41 +1139,14 @@ class CameraController extends EventDispatcher {
       .multiplyScalar(1 + (zoomFactor - 1) * distanceScale)
       .add(hit.point);
   }
-  #getZoomOutTransitionTarget(hit, zoomFactor, source, distanceScale, target) {
-    this.#camera.getWorldDirection(_forward);
-    target
-      .copy(source)
-      .addScaledVector(
-        _forward,
-        -source.distanceTo(hit.point) * (zoomFactor - 1) * distanceScale,
-      );
-  }
   #getZoomPosition(hit, zoomAmount, zoomFactor, target) {
     const source = _vec4.copy(this.#camera.position);
     let distanceScale = 1;
-    let transitionWeight = 0;
     if (zoomAmount < 0 && this.#ellipsoid && !this.#isCameraCenterMode()) {
-      const metrics = this.#getZoomOutMetrics(source, hit.virtual ? null : hit);
+      const metrics = this.#getZoomOutMetrics(source);
       distanceScale = metrics.distanceScale;
-      transitionWeight = metrics.transitionWeight;
     }
     this.#getScaledZoomTarget(hit, zoomFactor, source, distanceScale, target);
-    if (transitionWeight <= 0) {
-      return;
-    }
-    const transitionDistanceScale = this.#getZoomOutMetrics(
-      source,
-      null,
-      1 / 3,
-    ).distanceScale;
-    this.#getZoomOutTransitionTarget(
-      hit,
-      zoomFactor,
-      source,
-      transitionDistanceScale,
-      _vec6,
-    );
-    target.lerp(_vec6, transitionWeight);
   }
   #applyZoom(zoomAmount) {
     const hit = this.#hit;
@@ -1203,7 +1167,6 @@ class CameraController extends EventDispatcher {
         zoomFactor = this.minDistance / distance;
       }
     }
-    //@ts-expect-error
     if (this.#camera.isOrthographicCamera) {
       this.#camera.zoom /= zoomFactor;
       this.#camera.updateProjectionMatrix();
