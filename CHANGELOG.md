@@ -6,10 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-05-21
+
 ### Changed
 
 - Changed Gaussian Splat crop saves to raw-copy surviving SPZ v3 packet bytes instead of re-encoding splats, preserving source quantization and SH data while using gzip level 6.
 - Optimized save-time Gaussian Splat crop filtering by evaluating raw SPZ positions against flattened selection matrices and planes.
+- Updated `3d-tiles-renderer` to `0.4.25`, `3d-tiles-rendererjs-3dgs-plugin` to `0.1.8`, and `@sparkjsdev/spark` to `2.1.0`; replaced the deprecated imagery globe `XYZTilesPlugin` path with `GeneratedSurfacePlugin` and `ImageOverlayPlugin`.
 
 ### Fixed
 

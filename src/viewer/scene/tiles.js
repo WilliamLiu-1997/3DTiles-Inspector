@@ -1,20 +1,18 @@
 import { Ion } from 'cesium';
 import { TilesRenderer } from '3d-tiles-renderer';
+import { ImplicitTilingPlugin } from '3d-tiles-renderer/src/core/plugins/ImplicitTilingPlugin.js';
+import { CesiumIonAuthPlugin } from '3d-tiles-renderer/src/three/plugins/CesiumIonAuthPlugin.js';
+import { DebugTilesPlugin } from '3d-tiles-renderer/src/three/plugins/DebugTilesPlugin.js';
+import { GLTFExtensionsPlugin } from '3d-tiles-renderer/src/three/plugins/GLTFExtensionsPlugin.js';
+import { QuantizedMeshPlugin } from '3d-tiles-renderer/src/three/plugins/QuantizedMeshPlugin.js';
+import { TileCompressionPlugin } from '3d-tiles-renderer/src/three/plugins/TileCompressionPlugin.js';
+import { UnloadTilesPlugin } from '3d-tiles-renderer/src/three/plugins/UnloadTilesPlugin.js';
+import { TilesFadePlugin } from '3d-tiles-renderer/src/three/plugins/fade/TilesFadePlugin.js';
+import { GeneratedSurfacePlugin } from '3d-tiles-renderer/src/three/plugins/images/GeneratedSurfacePlugin.js';
 import {
-  GLTFExtensionsPlugin,
-  ImplicitTilingPlugin,
-  TileCompressionPlugin,
-  TilesFadePlugin,
-  UnloadTilesPlugin,
-  XYZTilesPlugin,
-} from '3d-tiles-renderer/plugins';
-import {
-  CesiumIonAuthPlugin,
-  DebugTilesPlugin,
   ImageOverlayPlugin,
-  QuantizedMeshPlugin,
   XYZTilesOverlay,
-} from '3d-tiles-renderer/three/plugins';
+} from '3d-tiles-renderer/src/three/plugins/images/ImageOverlayPlugin.js';
 import { GaussianSplatPlugin } from '3d-tiles-rendererjs-3dgs-plugin';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { forceOpaqueScene } from '../utils.js';
@@ -31,6 +29,18 @@ const CESIUM_ION_TERRAIN = {
 export const DEFAULT_ERROR_TARGET = 16;
 const DEFAULT_TERRAIN_ERROR_TARGET = 16;
 
+function createSatelliteOverlay(preprocessURL) {
+  return new XYZTilesOverlay({
+    url: SATELLITE_IMAGERY.url,
+    levels: SATELLITE_IMAGERY.levels,
+    tileDimension: 256,
+    projection: 'EPSG:3857',
+    color: 0xffffff,
+    opacity: 1,
+    preprocessURL,
+  });
+}
+
 function configureGlobeTiles(next, { camera, preprocessURL, renderer }) {
   next.registerPlugin(new TilesFadePlugin());
   next.registerPlugin(new TileCompressionPlugin());
@@ -46,14 +56,15 @@ function configureGlobeTiles(next, { camera, preprocessURL, renderer }) {
 
 export function createImageryGlobeTiles(options) {
   const next = new TilesRenderer();
+  const satelliteOverlay = createSatelliteOverlay(options.preprocessURL);
   next.downloadQueue.maxJobs = 8;
   next.parseQueue.maxJobs = 2;
   next.registerPlugin(
-    new XYZTilesPlugin({
+    new GeneratedSurfacePlugin({
+      overlay: satelliteOverlay,
       shape: 'ellipsoid',
       center: true,
-      levels: SATELLITE_IMAGERY.levels,
-      url: SATELLITE_IMAGERY.url,
+      applyOverlayTexture: true,
     }),
   );
   configureGlobeTiles(next, options);
@@ -63,6 +74,7 @@ export function createImageryGlobeTiles(options) {
 
 export function createTerrainGlobeTiles(options) {
   const next = new TilesRenderer();
+  const satelliteOverlay = createSatelliteOverlay(options.preprocessURL);
   next.downloadQueue.maxJobs = 8;
   next.parseQueue.maxJobs = 2;
   next.registerPlugin(
@@ -80,16 +92,7 @@ export function createTerrainGlobeTiles(options) {
   next.registerPlugin(
     new ImageOverlayPlugin({
       renderer: options.renderer,
-      overlays: [
-        new XYZTilesOverlay({
-          url: SATELLITE_IMAGERY.url,
-          levels: SATELLITE_IMAGERY.levels,
-          tileDimension: 256,
-          projection: 'EPSG:3857',
-          color: 0xffffff,
-          opacity: 1,
-        }),
-      ],
+      overlays: [satelliteOverlay],
     }),
   );
   configureGlobeTiles(next, options);
