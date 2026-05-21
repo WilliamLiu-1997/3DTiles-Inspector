@@ -18,6 +18,19 @@ function normalizePositiveFinite(value, name) {
   return number;
 }
 
+function getMatrixMaxScaleOnAxis(matrix) {
+  const scaleX = Math.hypot(matrix[0], matrix[1], matrix[2]);
+  const scaleY = Math.hypot(matrix[4], matrix[5], matrix[6]);
+  const scaleZ = Math.hypot(matrix[8], matrix[9], matrix[10]);
+  const scale = Math.max(scaleX, scaleY, scaleZ);
+  if (!Number.isFinite(scale) || scale <= 0) {
+    throw new InspectorError(
+      'transform scale must be a finite number greater than 0.',
+    );
+  }
+  return scale;
+}
+
 function scaleGeometricErrorValue(
   target,
   key,
@@ -378,6 +391,13 @@ async function saveViewerTransform(
     geometricErrorLayerScale,
     'geometricErrorLayerScale',
   );
+  const transformGeometricErrorScale =
+    getMatrixMaxScaleOnAxis(normalizedEdit);
+  const effectiveGeometricErrorScale =
+    normalizedGeometricErrorScale * transformGeometricErrorScale;
+  if (!Number.isFinite(effectiveGeometricErrorScale)) {
+    throw new InspectorError('geometricErrorScale scaled value must be finite.');
+  }
   const tilesetPath = path.resolve(rootTilesetPath);
   const rootDir = path.dirname(tilesetPath);
 
@@ -425,7 +445,7 @@ async function saveViewerTransform(
 
   await updateTilesetJsonFile(tilesetPath, {
     geometricErrorLayerScale: normalizedGeometricErrorLayerScale,
-    geometricErrorScale: normalizedGeometricErrorScale,
+    geometricErrorScale: effectiveGeometricErrorScale,
     rootDir,
     rootTransform: nextRoot,
   });
@@ -449,7 +469,7 @@ async function saveViewerTransform(
     summary.root_transform_source = 'transform';
     summary.root_coordinate = null;
     summary.viewer_geometric_error_scale =
-      previousGeometricErrorScale * normalizedGeometricErrorScale;
+      previousGeometricErrorScale * effectiveGeometricErrorScale;
     const previousGeometricErrorLayerScale =
       summary.viewer_geometric_error_layer_scale == null
         ? 1

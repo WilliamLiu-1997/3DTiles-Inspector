@@ -6,6 +6,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-05-22
+
+### Fixed
+
+- Fixed saved root scale edits not applying the scale delta to persisted tileset geometric errors.
+
 ## [0.2.10] - 2026-05-22
 
 ### Added

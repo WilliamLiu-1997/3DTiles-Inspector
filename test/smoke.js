@@ -47,6 +47,27 @@ function assertClose(actual, expected, label) {
   );
 }
 
+function createUniformScaleMatrix4(scale) {
+  return [
+    scale,
+    0,
+    0,
+    0,
+    0,
+    scale,
+    0,
+    0,
+    0,
+    0,
+    scale,
+    0,
+    0,
+    0,
+    0,
+    1,
+  ];
+}
+
 function assertVectorClose(actual, expected, label) {
   expected.forEach((value, index) => {
     assertClose(actual[index], value, `${label}[${index}]`);
@@ -1038,6 +1059,55 @@ async function assertCropTraversalLimitsResourceConcurrency(baseDir) {
   assert.strictEqual(maxActiveRuns, SPLAT_CROP_WORKER_COUNT);
 }
 
+async function assertScaleSaveScalesGeometricErrors(baseDir) {
+  const scaleDir = path.join(baseDir, 'scale-geometric-error');
+  fs.mkdirSync(scaleDir);
+
+  const tilesetPath = path.join(scaleDir, 'tileset.json');
+  const summaryPath = path.join(scaleDir, 'build_summary.json');
+  fs.writeFileSync(
+    tilesetPath,
+    JSON.stringify({
+      asset: { version: '1.0' },
+      geometricError: 10,
+      root: {
+        geometricError: 10,
+        transform: createUniformScaleMatrix4(3),
+        children: [{ geometricError: 5 }],
+      },
+    }),
+    'utf8',
+  );
+  fs.writeFileSync(
+    summaryPath,
+    JSON.stringify({ viewer_geometric_error_scale: 3 }),
+    'utf8',
+  );
+
+  const session = await api.startInspectorSession(tilesetPath, {
+    handleSignals: false,
+    openBrowser: false,
+  });
+  try {
+    await postSave(session.url, {
+      geometricErrorLayerScale: 1,
+      geometricErrorScale: 1,
+      transform: createUniformScaleMatrix4(2),
+    });
+  } finally {
+    await session.close();
+  }
+
+  const tileset = JSON.parse(fs.readFileSync(tilesetPath, 'utf8'));
+  assert.deepStrictEqual(tileset.root.transform, createUniformScaleMatrix4(6));
+  assert.strictEqual(tileset.geometricError, 20);
+  assert.strictEqual(tileset.root.geometricError, 20);
+  assert.strictEqual(tileset.root.children[0].geometricError, 10);
+
+  const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+  assert.strictEqual(summary.viewer_geometric_error_scale, 6);
+}
+
 async function main() {
   assert.strictEqual(typeof api.InspectorError, 'function');
   assert.strictEqual(typeof api.startInspectorSession, 'function');
@@ -1057,6 +1127,7 @@ async function main() {
 
   try {
     await assertAtomicWriteRetriesLockedTarget(tempDir);
+    await assertScaleSaveScalesGeometricErrors(tempDir);
 
     const tilesetPath = path.join(tempDir, 'tileset.json');
     const nestedDir = path.join(tempDir, 'nested');
