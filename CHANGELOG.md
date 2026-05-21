@@ -6,6 +6,11 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Changed
+
+- Changed Gaussian Splat crop saves to raw-copy surviving SPZ v3 packet bytes instead of re-encoding splats, preserving source quantization and SH data while using gzip level 6.
+- Optimized save-time Gaussian Splat crop filtering by evaluating raw SPZ positions against flattened selection matrices and planes.
+
 ### Fixed
 
 - Fixed globe zoom-out near the horizon drifting away from the zoom anchor or moving the camera below the ellipsoid surface.

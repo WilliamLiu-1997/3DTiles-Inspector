@@ -2,6 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const zlib = require('zlib');
 const { spawnSync } = require('child_process');
 
 const api = require('../src');
@@ -29,6 +30,15 @@ const {
 const IDENTITY_MATRIX4 = [
   1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
 ];
+const SPZ_MAGIC = 0x5053474e;
+const SPZ_VERSION_3 = 3;
+const SPZ_FLAG_ANTIALIASED = 0x01;
+const SPZ_SH_VECS_BY_DEGREE = {
+  0: 0,
+  1: 3,
+  2: 8,
+  3: 15,
+};
 
 function assertClose(actual, expected, label) {
   assert.ok(
@@ -97,6 +107,170 @@ function getGaussianAccessorCounts(gltf) {
   const primitive = gltf.meshes[0].primitives[0];
   return Object.values(primitive.attributes).map(
     (accessorIndex) => gltf.accessors[accessorIndex].count,
+  );
+}
+
+function makeRawSpzLayout(pointCount, shDegree) {
+  const shVecs = SPZ_SH_VECS_BY_DEGREE[shDegree];
+  const positionsOffset = 16;
+  const opacityOffset = positionsOffset + pointCount * 9;
+  const colorOffset = opacityOffset + pointCount;
+  const scaleOffset = colorOffset + pointCount * 3;
+  const quatOffset = scaleOffset + pointCount * 3;
+  const extraShOffset = quatOffset + pointCount * 4;
+  const extraBytesPerPoint = shVecs * 3;
+  return {
+    byteLength: extraShOffset + pointCount * extraBytesPerPoint,
+    colorOffset,
+    extraBytesPerPoint,
+    extraShOffset,
+    opacityOffset,
+    positionsOffset,
+    quatOffset,
+    scaleOffset,
+  };
+}
+
+function writeInt24LE(buffer, offset, value) {
+  const encoded = value & 0xffffff;
+  buffer[offset] = encoded & 0xff;
+  buffer[offset + 1] = (encoded >> 8) & 0xff;
+  buffer[offset + 2] = (encoded >> 16) & 0xff;
+}
+
+function writeRawSpzCenters(raw, layout, points, fractionalBits) {
+  const fraction = 1 << fractionalBits;
+  points.forEach(([x, y, z], index) => {
+    const base = layout.positionsOffset + index * 9;
+    writeInt24LE(raw, base, Math.round(x * fraction));
+    writeInt24LE(raw, base + 3, Math.round(y * fraction));
+    writeInt24LE(raw, base + 6, Math.round(z * fraction));
+  });
+}
+
+function writePatternBlock(raw, offset, pointCount, stride, seed) {
+  for (let index = 0; index < pointCount; index++) {
+    for (let component = 0; component < stride; component++) {
+      raw[offset + index * stride + component] =
+        (seed + index * 37 + component * 11) & 0xff;
+    }
+  }
+}
+
+function createRawCopyTestSpzBytes(points) {
+  const shDegree = 3;
+  const fractionalBits = 12;
+  const layout = makeRawSpzLayout(points.length, shDegree);
+  const raw = Buffer.alloc(layout.byteLength);
+
+  raw.writeUInt32LE(SPZ_MAGIC, 0);
+  raw.writeUInt32LE(SPZ_VERSION_3, 4);
+  raw.writeUInt32LE(points.length, 8);
+  raw.writeUInt8(shDegree, 12);
+  raw.writeUInt8(fractionalBits, 13);
+  raw.writeUInt8(SPZ_FLAG_ANTIALIASED, 14);
+  raw.writeUInt8(0, 15);
+
+  writeRawSpzCenters(raw, layout, points, fractionalBits);
+  writePatternBlock(raw, layout.opacityOffset, points.length, 1, 0x11);
+  writePatternBlock(raw, layout.colorOffset, points.length, 3, 0x22);
+  writePatternBlock(raw, layout.scaleOffset, points.length, 3, 0x33);
+  writePatternBlock(raw, layout.quatOffset, points.length, 4, 0x44);
+  writePatternBlock(
+    raw,
+    layout.extraShOffset,
+    points.length,
+    layout.extraBytesPerPoint,
+    0x55,
+  );
+
+  return zlib.gzipSync(raw, {
+    level: 9,
+    memLevel: 9,
+  });
+}
+
+function assertRawBlockMatches(
+  sourceRaw,
+  targetRaw,
+  survivors,
+  block,
+) {
+  survivors.forEach((sourceIndex, targetIndex) => {
+    const sourceStart = block.sourceOffset + sourceIndex * block.stride;
+    const targetStart = block.targetOffset + targetIndex * block.stride;
+    assert.strictEqual(
+      Buffer.compare(
+        sourceRaw.subarray(sourceStart, sourceStart + block.stride),
+        targetRaw.subarray(targetStart, targetStart + block.stride),
+      ),
+      0,
+      `${block.label} bytes must be raw-copied`,
+    );
+  });
+}
+
+function assertRawSpzSubsetMatches(sourceBytes, targetBytes, survivors) {
+  const sourceRaw = zlib.gunzipSync(sourceBytes);
+  const targetRaw = zlib.gunzipSync(targetBytes);
+  const sourceCount = sourceRaw.readUInt32LE(8);
+  const shDegree = sourceRaw.readUInt8(12);
+  const sourceLayout = makeRawSpzLayout(sourceCount, shDegree);
+  const targetLayout = makeRawSpzLayout(survivors.length, shDegree);
+  const expectedHeader = Buffer.from(sourceRaw.subarray(0, 16));
+
+  expectedHeader.writeUInt32LE(survivors.length, 8);
+  assert.strictEqual(
+    Buffer.compare(targetRaw.subarray(0, 16), expectedHeader),
+    0,
+    'SPZ subset header should preserve source metadata except point count',
+  );
+  assert.strictEqual(targetRaw.length, targetLayout.byteLength);
+
+  const blocks = [
+    {
+      label: 'position',
+      sourceOffset: sourceLayout.positionsOffset,
+      stride: 9,
+      targetOffset: targetLayout.positionsOffset,
+    },
+    {
+      label: 'opacity',
+      sourceOffset: sourceLayout.opacityOffset,
+      stride: 1,
+      targetOffset: targetLayout.opacityOffset,
+    },
+    {
+      label: 'color',
+      sourceOffset: sourceLayout.colorOffset,
+      stride: 3,
+      targetOffset: targetLayout.colorOffset,
+    },
+    {
+      label: 'scale',
+      sourceOffset: sourceLayout.scaleOffset,
+      stride: 3,
+      targetOffset: targetLayout.scaleOffset,
+    },
+    {
+      label: 'quaternion',
+      sourceOffset: sourceLayout.quatOffset,
+      stride: 4,
+      targetOffset: targetLayout.quatOffset,
+    },
+  ];
+
+  if (sourceLayout.extraBytesPerPoint > 0) {
+    blocks.push({
+      label: 'SH',
+      sourceOffset: sourceLayout.extraShOffset,
+      stride: sourceLayout.extraBytesPerPoint,
+      targetOffset: targetLayout.extraShOffset,
+    });
+  }
+
+  blocks.forEach((block) =>
+    assertRawBlockMatches(sourceRaw, targetRaw, survivors, block),
   );
 }
 
@@ -249,6 +423,65 @@ async function assertCropSaveDeletesTwoSplats({ tilesetPath, readSpzBytes }) {
   const centers = await readSpzCenters(readSpzBytes());
   assert.strictEqual(centers.length, 1);
   assert.ok(Math.abs(centers[0].x - 3) < 0.01);
+}
+
+async function assertCropSaveRawCopiesSurvivingSpzBytes(baseDir) {
+  const rawCopyDir = path.join(baseDir, 'crop-raw-copy');
+  fs.mkdirSync(rawCopyDir);
+
+  const spzBytes = createRawCopyTestSpzBytes([
+    [0, 0, 0],
+    [0.5, 0, 0],
+    [3, 0, 0],
+  ]);
+  const tilesetPath = path.join(rawCopyDir, 'tileset.json');
+  const gltfPath = path.join(rawCopyDir, 'splats.gltf');
+  const binPath = path.join(rawCopyDir, 'splats.bin');
+
+  fs.writeFileSync(binPath, spzBytes);
+  fs.writeFileSync(
+    gltfPath,
+    JSON.stringify(makeGaussianGltf('splats.bin', spzBytes.length)),
+    'utf8',
+  );
+  writeSplatTileset(tilesetPath, 'splats.gltf');
+
+  const session = await api.startInspectorSession(tilesetPath, {
+    handleSignals: false,
+    openBrowser: false,
+  });
+  try {
+    const payload = await postSave(session.url, {
+      geometricErrorLayerScale: 1,
+      geometricErrorScale: 1,
+      splatScreenSelections: [
+        createScreenSelectionPayload({
+          planeMatrices: await createBoxPlaneMatrices({
+            maxX: 0.75,
+            minX: 0.25,
+          }),
+        }),
+      ],
+      transform: IDENTITY_MATRIX4,
+    });
+    assert.strictEqual(payload.deletedSplats, 1);
+    assert.strictEqual(payload.processedSplatResources, 1);
+  } finally {
+    await session.close();
+  }
+
+  const centers = await readSpzCenters(
+    readGltfBufferViewBytes(gltfPath, binPath),
+  );
+  assert.strictEqual(centers.length, 2);
+  assert.ok(Math.abs(centers[0].x) < 0.01);
+  assert.ok(Math.abs(centers[1].x - 3) < 0.01);
+
+  assertRawSpzSubsetMatches(
+    spzBytes,
+    readGltfBufferViewBytes(gltfPath, binPath),
+    [0, 2],
+  );
 }
 
 async function assertScreenSelectionSaveDeletesTwoSplats({
@@ -967,6 +1200,7 @@ async function main() {
     await assertCropSavePrunesFullyDeletedSplatTile(tempDir);
     await assertCropSaveDeletesFullyDeletedGlbFile(tempDir);
     await assertCropSaveUpdatesAccessorCounts(tempDir);
+    await assertCropSaveRawCopiesSurvivingSpzBytes(tempDir);
     await assertCropTraversalLimitsResourceConcurrency(tempDir);
 
     const screenCropDir = path.join(tempDir, 'crop-screen');
