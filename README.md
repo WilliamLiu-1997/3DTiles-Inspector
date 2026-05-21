@@ -85,7 +85,7 @@ const {
 
 <img src="https://raw.githubusercontent.com/WilliamLiu-1997/3DTiles-Inspector/main/screenshot.png" alt="screenshot" />
 
-- `Translate`, `Rotate`, and `Reset` for root transform edits
+- `Translate`, `Rotate`, infinite `Scale` track/value input, and `Reset` for root transform edits
 - `Move Camera` to a WGS84 latitude / longitude / height
 - `Move Tiles` to relocate the tileset root with an ENU-aligned transform
 - `Set Position` to click the globe, terrain, or loaded tiles and place the tileset there

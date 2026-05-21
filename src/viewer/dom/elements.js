@@ -49,5 +49,7 @@ export function getViewerElements() {
     toolbarEl,
     toolbarToggleButton: document.getElementById('toolbar-toggle'),
     translateButton: document.getElementById('translate'),
+    uniformScaleTrackEl: document.getElementById('uniform-scale'),
+    uniformScaleValueInput: document.getElementById('uniform-scale-value'),
   };
 }

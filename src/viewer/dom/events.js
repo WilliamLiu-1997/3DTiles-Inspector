@@ -12,6 +12,7 @@ export function bindViewerEvents({
   ktx2Loader,
   renderer,
   setStatus,
+  uniformScale,
 }) {
   const {
     boundingVolumeButton,
@@ -30,7 +31,22 @@ export function bindViewerEvents({
     terrainButton,
     toolbarToggleButton,
     translateButton,
+    uniformScaleTrackEl,
+    uniformScaleValueInput,
   } = elements;
+
+  let uniformScaleTrackPointerId = null;
+
+  function setUniformScaleStatus() {
+    setStatus(
+      `Scale set to x${uniformScale.formatScale(uniformScale.getScale())}.`,
+    );
+  }
+
+  function updateUniformScaleFromTrackPointer(event) {
+    handlers.cancelPositionPickModes();
+    uniformScale.setScaleFromTrackClientX(event.clientX);
+  }
 
   translateButton.addEventListener('click', () => {
     handlers.cancelPositionPickModes();
@@ -50,6 +66,79 @@ export function bindViewerEvents({
         : 'Rotate mode disabled.',
     );
   });
+  uniformScaleTrackEl.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    uniformScaleTrackPointerId = event.pointerId;
+    uniformScaleTrackEl.focus();
+    uniformScaleTrackEl.classList.add('dragging');
+    uniformScaleTrackEl.setPointerCapture(event.pointerId);
+    uniformScale.beginTrackDrag(event.clientX);
+  });
+  uniformScaleTrackEl.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== uniformScaleTrackPointerId) {
+      return;
+    }
+
+    updateUniformScaleFromTrackPointer(event);
+  });
+  uniformScaleTrackEl.addEventListener('pointerup', (event) => {
+    if (event.pointerId !== uniformScaleTrackPointerId) {
+      return;
+    }
+
+    uniformScaleTrackPointerId = null;
+    uniformScaleTrackEl.classList.remove('dragging');
+    uniformScaleTrackEl.releasePointerCapture(event.pointerId);
+    setUniformScaleStatus();
+  });
+  uniformScaleTrackEl.addEventListener('pointercancel', (event) => {
+    if (event.pointerId !== uniformScaleTrackPointerId) {
+      return;
+    }
+
+    uniformScaleTrackPointerId = null;
+    uniformScaleTrackEl.classList.remove('dragging');
+    uniformScaleTrackEl.releasePointerCapture(event.pointerId);
+  });
+  uniformScaleTrackEl.addEventListener('keydown', (event) => {
+    let handled = true;
+    const step = event.shiftKey ? 1 : 0.1;
+
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
+      uniformScale.nudgeScaleExponent(-step);
+    } else if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
+      uniformScale.nudgeScaleExponent(step);
+    } else {
+      handled = false;
+    }
+
+    if (!handled) {
+      return;
+    }
+
+    event.preventDefault();
+    handlers.cancelPositionPickModes();
+    setUniformScaleStatus();
+  });
+  uniformScaleValueInput.addEventListener('input', () => {
+    handlers.cancelPositionPickModes();
+    uniformScale.setScaleValue(uniformScaleValueInput.value);
+  });
+  uniformScaleValueInput.addEventListener('change', () => {
+    if (
+      !uniformScale.setScaleValue(uniformScaleValueInput.value, {
+        commit: true,
+      })
+    ) {
+      setStatus('Scale must be greater than 0.', true);
+      return;
+    }
+    setUniformScaleStatus();
+  });
   cropScreenSelectButton.addEventListener(
     'click',
     handlers.toggleCropScreenSelectionMode,
@@ -62,7 +151,10 @@ export function bindViewerEvents({
     'click',
     handlers.cancelCropScreenSelection,
   );
-  toolbarToggleButton.addEventListener('click', handlers.toggleToolbarVisibility);
+  toolbarToggleButton.addEventListener(
+    'click',
+    handlers.toggleToolbarVisibility,
+  );
   terrainButton.addEventListener('click', () => {
     handlers.setTerrainEnabled(!getTerrainEnabled());
     setStatus(
@@ -104,42 +196,30 @@ export function bindViewerEvents({
   setPositionButton.addEventListener('click', handlers.toggleSetPositionMode);
   resetButton.addEventListener('click', handlers.resetToSaved);
   saveButton.addEventListener('click', handlers.saveTransform);
-  renderer.domElement.addEventListener(
-    'pointerdown',
-    (event) => {
-      if (handlers.handleScreenSelectionPointerDown(event)) {
-        return;
-      }
-      handlers.handleSetPositionPointerDown(event);
-    },
-  );
-  renderer.domElement.addEventListener(
-    'pointermove',
-    (event) => {
-      if (handlers.handleScreenSelectionPointerMove(event)) {
-        return;
-      }
-      handlers.handleSetPositionPointerMove(event);
-    },
-  );
-  renderer.domElement.addEventListener(
-    'pointerup',
-    (event) => {
-      if (handlers.handleScreenSelectionPointerUp(event)) {
-        return;
-      }
-      handlers.handleSetPositionPointerUp(event);
-    },
-  );
-  renderer.domElement.addEventListener(
-    'pointercancel',
-    (event) => {
-      if (handlers.handleScreenSelectionPointerCancel(event)) {
-        return;
-      }
-      handlers.handleSetPositionPointerCancel(event);
-    },
-  );
+  renderer.domElement.addEventListener('pointerdown', (event) => {
+    if (handlers.handleScreenSelectionPointerDown(event)) {
+      return;
+    }
+    handlers.handleSetPositionPointerDown(event);
+  });
+  renderer.domElement.addEventListener('pointermove', (event) => {
+    if (handlers.handleScreenSelectionPointerMove(event)) {
+      return;
+    }
+    handlers.handleSetPositionPointerMove(event);
+  });
+  renderer.domElement.addEventListener('pointerup', (event) => {
+    if (handlers.handleScreenSelectionPointerUp(event)) {
+      return;
+    }
+    handlers.handleSetPositionPointerUp(event);
+  });
+  renderer.domElement.addEventListener('pointercancel', (event) => {
+    if (handlers.handleScreenSelectionPointerCancel(event)) {
+      return;
+    }
+    handlers.handleSetPositionPointerCancel(event);
+  });
 
   window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);

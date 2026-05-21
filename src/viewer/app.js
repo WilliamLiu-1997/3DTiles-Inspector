@@ -10,6 +10,7 @@ import { createStatusPanel } from './dom/statusPanel.js';
 import { createViewerToggles } from './dom/viewerToggles.js';
 import { createGeoCameraController } from './transform/geoCamera.js';
 import { createGeometricErrorController } from './transform/geometricError.js';
+import { createUniformScaleController } from './transform/uniformScale.js';
 import { createGlobeController } from './scene/globeController.js';
 import { createViewerScene } from './scene/sceneSetup.js';
 import { createViewerTransformControls } from './scene/transformControls.js';
@@ -71,6 +72,8 @@ const {
   toolbarEl,
   toolbarToggleButton,
   translateButton,
+  uniformScaleTrackEl,
+  uniformScaleValueInput,
 } = viewerElements;
 
 const MOVE_TO_TILES_POSE = {
@@ -244,6 +247,12 @@ const geometricError = createGeometricErrorController({
   getTiles: () => tiles,
 });
 
+const uniformScale = createUniformScaleController({
+  applyScale: (scale) => rootTransform?.applyUniformScale(scale),
+  uniformScaleTrackEl,
+  uniformScaleValueInput,
+});
+
 function getTilesetBoundingSphere(target) {
   if (!tiles || !tiles.getBoundingSphere(target)) {
     return false;
@@ -342,6 +351,7 @@ rootTransform = createRootTransformController({
   transformHandle,
   onCoordinateChanged: updateCoordinateInputs,
   onTransformsInvalidated: () => cropController.syncWorldState(),
+  onUniformScaleChanged: uniformScale.syncFromRootScale,
 });
 
 function setGaussianSplatUiVisible(visible) {
@@ -384,6 +394,7 @@ function exitSaveInteractionModes() {
 }
 
 geometricError.initializeInputs();
+uniformScale.initializeInputs();
 transformModeController.setMode(null);
 
 function moveCameraToTiles() {
@@ -614,6 +625,7 @@ bindViewerEvents({
   ktx2Loader,
   renderer,
   setStatus,
+  uniformScale,
 });
 
 window.addEventListener('popstate', () => {

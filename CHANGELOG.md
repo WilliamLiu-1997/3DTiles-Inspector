@@ -6,6 +6,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-05-22
+
+### Added
+
+- Added an infinite `Scale` drag track and editable value input for root transform edits.
+
 ## [0.2.9] - 2026-05-21
 
 ### Changed

@@ -279,7 +279,7 @@ function buildViewerHtml(viewerConfig) {
         grid-template-rows: minmax(0, 1fr) auto;
         gap: 0;
         padding: 10px 14px;
-        border: 1px solid rgba(22, 50, 79, 0.12);
+        border: 1px solid rgba(73, 80, 87, 0.16);
         border-top: 0;
         border-radius: 0 0 20px 20px;
         background: rgba(255, 255, 255, 0.9);
@@ -500,6 +500,124 @@ function buildViewerHtml(viewerConfig) {
       .range-field input[type='range'] {
         width: 100%;
         margin: 0;
+      }
+
+      .scale-value-input {
+        width: 82px;
+        min-width: 0;
+        padding: 4px 7px;
+        border: 1px solid rgba(22, 50, 79, 0.16);
+        border-radius: 8px;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        text-align: right;
+        color: #16324f;
+        background: rgba(255, 255, 255, 0.92);
+      }
+
+      .scale-track {
+        --scale-track-offset: 0px;
+        position: relative;
+        width: 100%;
+        height: 22px;
+        overflow: hidden;
+        border: 1px solid rgba(22, 50, 79, 0.12);
+        border-radius: 9px;
+        padding: 0;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(231, 235, 240, 0.92)),
+          #edf0f4;
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.78),
+          inset 0 -1px 0 rgba(73, 80, 87, 0.08);
+        cursor: ew-resize;
+        touch-action: none;
+      }
+
+      .scale-track::before {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: 8px;
+        left: 8px;
+        height: 4px;
+        border-radius: 999px;
+        background:
+          linear-gradient(
+            90deg,
+            rgba(73, 80, 87, 0.08),
+            rgba(73, 80, 87, 0.42) 50%,
+            rgba(73, 80, 87, 0.08)
+          );
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.56);
+        transform: translateY(-50%);
+      }
+
+      .scale-track::after {
+        content: "";
+        position: absolute;
+        inset: 5px 8px 5px;
+        background-image:
+          linear-gradient(
+            90deg,
+            rgba(73, 80, 87, 0.46) 0 1px,
+            transparent 1px 100%
+          ),
+          linear-gradient(
+            90deg,
+            rgba(73, 80, 87, 0.26) 0 1px,
+            transparent 1px 100%
+          );
+        background-repeat: repeat-x;
+        background-size:
+          20px 12px,
+          20px 7px;
+        background-position:
+          calc(50% + var(--scale-track-offset) - 1px) -1px,
+          calc(50% + var(--scale-track-offset) + 10px) 2px;
+        opacity: 0.72;
+        pointer-events: none;
+      }
+
+      .scale-track-center {
+        position: absolute;
+        top: 3px;
+        bottom: 3px;
+        left: 50%;
+        width: 2px;
+        border-radius: 999px;
+        background: rgba(73, 80, 87, 0.72);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.72);
+        transform: translateX(-50%);
+        pointer-events: none;
+      }
+
+      .scale-track:hover::before,
+      .scale-track:focus-visible::before,
+      .scale-track.dragging::before {
+        background:
+          linear-gradient(
+            90deg,
+            rgba(73, 80, 87, 0.12),
+            rgba(73, 80, 87, 0.58) 50%,
+            rgba(73, 80, 87, 0.12)
+          );
+      }
+
+      .scale-track.dragging {
+        border-color: rgba(73, 80, 87, 0.32);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.82),
+          inset 0 -1px 0 rgba(73, 80, 87, 0.08);
+      }
+
+      .scale-track:focus {
+        outline: none;
+      }
+
+      .scale-track:focus-visible {
+        outline: none;
       }
 
       .coordinate-grid {
@@ -795,8 +913,28 @@ function buildViewerHtml(viewerConfig) {
             <div class="transform-actions">
               <button id="translate" type="button">Translate</button>
               <button id="rotate" type="button">Rotate</button>
-              <button id="set-position" type="button">Set Position</button>
-              <button id="reset" type="button">Reset</button>
+              <div class="range-field full-span">
+                <div class="range-field-header">
+                  <span>Scale</span>
+                  <input
+                    id="uniform-scale-value"
+                    class="scale-value-input"
+                    type="number"
+                    step="any"
+                    value="1"
+                  />
+                </div>
+                <div
+                  id="uniform-scale"
+                  class="scale-track"
+                  tabindex="0"
+                  aria-label="Scale x1"
+                >
+                  <span class="scale-track-center" aria-hidden="true"></span>
+                </div>
+              </div>
+              <button id="set-position" class="full-span" type="button">Set Position</button>
+              <button id="reset" class="full-span" type="button">Reset</button>
             </div>
           </div>
           <div class="toolbar-section">

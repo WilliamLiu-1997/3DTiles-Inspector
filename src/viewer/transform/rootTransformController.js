@@ -21,6 +21,7 @@ export function createRootTransformController({
   transformHandle,
   onTransformsInvalidated,
   onCoordinateChanged,
+  onUniformScaleChanged,
 }) {
   const coordinateWorldPosition = new Vector3();
   const coordinateTransformMatrix = new Matrix4();
@@ -46,6 +47,24 @@ export function createRootTransformController({
 
   function getCurrentRootTransformArray() {
     return getCurrentRootTransform(currentRootTransformMatrix).toArray();
+  }
+
+  function getUniformScale() {
+    const scale = transformHandle.scale;
+    const scaleValues = [scale.x, scale.y, scale.z]
+      .map((value) => Math.abs(value))
+      .filter((value) => Number.isFinite(value));
+    if (scaleValues.length === 0) {
+      return 1;
+    }
+    return (
+      scaleValues.reduce((total, value) => total + value, 0) /
+      scaleValues.length
+    );
+  }
+
+  function notifyUniformScaleChanged() {
+    onUniformScaleChanged?.(getUniformScale());
   }
 
   function getCurrentMatrix() {
@@ -94,6 +113,7 @@ export function createRootTransformController({
     } finally {
       syncingTransformHandle = false;
     }
+    notifyUniformScaleChanged();
   }
 
   function applySaved(matrix) {
@@ -113,6 +133,21 @@ export function createRootTransformController({
       target: coordinateEditMatrix,
     });
     invalidate();
+    notifyUniformScaleChanged();
+  }
+
+  function applyUniformScale(scale) {
+    const nextScale = Number(scale);
+    if (!Number.isFinite(nextScale) || nextScale <= 0) {
+      return false;
+    }
+
+    transformHandle.scale.set(nextScale, nextScale, nextScale);
+    transformHandle.updateMatrix();
+    transformHandle.updateMatrixWorld(true);
+    applyFromRootTransform(transformHandle.matrix);
+    syncCoordinateInputs();
+    return true;
   }
 
   async function applyFromCoordinate(latitude, longitude, height) {
@@ -145,6 +180,7 @@ export function createRootTransformController({
     lastSavedMatrix.identity();
     resetEditableObjectTransform(transformHandle);
     tilesTransformDirty = true;
+    notifyUniformScaleChanged();
   }
 
   function refresh(url) {
@@ -222,6 +258,7 @@ export function createRootTransformController({
     applyFromCoordinate,
     applyFromRootTransform,
     applySaved,
+    applyUniformScale,
     flush,
     getCurrentMatrix,
     getCurrentRootTransform,
@@ -229,6 +266,7 @@ export function createRootTransformController({
     getIncrementalSinceSaved,
     getLastSaved: () => lastSavedMatrix,
     getLoadError: () => savedRootMatrixLoadError,
+    getUniformScale,
     isSyncingHandle: () => syncingTransformHandle,
     markDirty() {
       tilesTransformDirty = true;
