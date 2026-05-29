@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed globe camera drag and rotation stability by using ellipsoid surface normals for camera-up alignment and refreshing drag anchors when switching into high-altitude drag behavior.
+
 ## [0.2.11] - 2026-05-22
 
 ### Fixed

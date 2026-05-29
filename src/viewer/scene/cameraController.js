@@ -11,10 +11,8 @@ import {
   Vector2,
   Vector3,
 } from 'three';
+import { Ellipsoid } from '3d-tiles-renderer';
 
-const createUninitializedCallback = (name) => () => {
-  console.warn(`${name} was called before initialization.`);
-};
 const CAMERA_CENTER_MODE_DISTANCE = 3000000;
 const CAMERA_CENTER_MODE_DISTANCE_SQ = CAMERA_CENTER_MODE_DISTANCE ** 2;
 
@@ -347,16 +345,14 @@ const _vec5 = new Vector3();
 const _vec6 = new Vector3();
 const _axis = new Vector3();
 const _localUp = new Vector3();
+const _positionUp = new Vector3();
 const _localRight = new Vector3();
-const _localForward = new Vector3();
 const _rotMatrix = new Matrix4();
-const _invMatrix = new Matrix4();
 const _quaternion = new Quaternion();
+const _rollRotation = new Quaternion();
 const _plane = new Plane();
 const _ray = new Ray();
-const _zoomOutMetrics = { distanceScale: 1 };
-const _fixedPointSurface = new Vector3();
-const _fixedPointNormal = new Vector3();
+const _dragEllipsoid = new Ellipsoid(1, 1, 1);
 class CameraController extends EventDispatcher {
   enableDamping;
   dampingFactor;
@@ -376,8 +372,6 @@ class CameraController extends EventDispatcher {
   #rotateInertia;
   #dragInertia;
   #dragAnchorPoint;
-  #dragStartPosition;
-  #dragStartQuaternion;
   #dragPlaneNormal;
   #inertiaValue;
   #enabled;
@@ -385,22 +379,6 @@ class CameraController extends EventDispatcher {
   #ellipsoidMaxRadius;
   #lastTime;
   #hit;
-  #contextMenuEvent = createUninitializedCallback(
-    'CameraController.#contextMenuEvent',
-  );
-  #pointerDownEvent = createUninitializedCallback(
-    'CameraController.#pointerDownEvent',
-  );
-  #pointerMoveEvent = createUninitializedCallback(
-    'CameraController.#pointerMoveEvent',
-  );
-  #pointerUpEvent = createUninitializedCallback(
-    'CameraController.#pointerUpEvent',
-  );
-  #wheelEvent = createUninitializedCallback('CameraController.#wheelEvent');
-  #pointerEnterEvent = createUninitializedCallback(
-    'CameraController.#pointerEnterEvent',
-  );
   #pointerDownFilter;
   #zoomTimeout;
   constructor(renderer, scene, camera, options = {}) {
@@ -428,8 +406,6 @@ class CameraController extends EventDispatcher {
     this.#rotateInertia = new Vector2();
     this.#dragInertia = new Vector3();
     this.#dragAnchorPoint = new Vector3();
-    this.#dragStartPosition = new Vector3();
-    this.#dragStartQuaternion = new Quaternion();
     this.#dragPlaneNormal = new Vector3();
     this.#inertiaValue = 0;
     this.#enabled = false;
@@ -452,12 +428,6 @@ class CameraController extends EventDispatcher {
       this.#enabled = v;
       this.#resetState();
       this.#pointerTracker.reset();
-      if (!this.enabled) {
-        this.#dragInertia.set(0, 0, 0);
-        this.#rotateInertia.set(0, 0);
-        this.#zoomInertia = 0;
-        this.#inertiaValue = 0;
-      }
       this.dispatchEvent(UPDATE_EVENT);
       this.dispatchEvent(FINISH_EVENT);
     }
@@ -492,8 +462,6 @@ class CameraController extends EventDispatcher {
     this.#rotateInertia.set(0, 0);
     this.#dragInertia.set(0, 0, 0);
     this.#dragAnchorPoint.set(0, 0, 0);
-    this.#dragStartPosition.set(0, 0, 0);
-    this.#dragStartQuaternion.identity();
     this.#dragPlaneNormal.set(0, 0, 0);
     this.#zoomInertia = 0;
     this.#hit = null;
@@ -519,12 +487,6 @@ class CameraController extends EventDispatcher {
     this.#domElement.style.touchAction = 'none';
     this.#pivotMesh.raycast = () => {};
     this.#scene.add(this.#pivotMesh);
-    this.#contextMenuEvent = this.#contextMenu.bind(this);
-    this.#pointerDownEvent = this.#pointerDown.bind(this);
-    this.#pointerMoveEvent = this.#pointerMove.bind(this);
-    this.#pointerUpEvent = this.#pointerUp.bind(this);
-    this.#wheelEvent = this.#wheel.bind(this);
-    this.#pointerEnterEvent = this.#pointerEnter.bind(this);
     this.#bindEvents();
     this.#enabled = true;
   }
@@ -565,23 +527,32 @@ class CameraController extends EventDispatcher {
       if (!_pointer1.equals(_pointer2) && this.#hit && this.#hit.distance > 0) {
         mouseToCoords(_pointer1.x, _pointer1.y, this.#domElement, _pointer1);
         mouseToCoords(_pointer2.x, _pointer2.y, this.#domElement, _pointer2);
-        this.#restoreDragStartCamera();
-        if (
+        const shouldDragModified = this.#shouldDragModified();
+        if (shouldDragModified) {
+          if (this.#modifiedDrag(_pointer1)) {
+            this.#inertiaValue = 1;
+            this.#rotateInertia.set(0, 0);
+            this.#zoomInertia = 0;
+            this.#finalizeCamera();
+          } else {
+            this.#setState(IDLE);
+          }
+          this.dispatchEvent(UPDATE_EVENT);
+        } else if (
           this.#intersectDragPlane(_pointer1, _vec1) &&
           this.#intersectDragPlane(_pointer2, _vec2)
         ) {
           _vec.subVectors(_vec1, this.#dragAnchorPoint);
           _vec5.subVectors(_vec1, _vec2);
-          if (this.#shouldDragModified()) {
-            this.#modifiedDrag(_vec);
-          } else {
-            this.#camera.position.sub(_vec);
-          }
+          this.#camera.position.sub(_vec);
           this.#dragInertia.copy(_vec5);
           this.#inertiaValue = 1;
           this.#rotateInertia.set(0, 0);
           this.#zoomInertia = 0;
           this.#finalizeCamera();
+          if (!shouldDragModified && this.#shouldDragModified()) {
+            this.#initializeDragAnchor();
+          }
           this.dispatchEvent(UPDATE_EVENT);
         }
       }
@@ -592,14 +563,23 @@ class CameraController extends EventDispatcher {
           this.#rotate(_pointer);
           this.#finalizeCamera();
         } else if (this.#dragInertia.lengthSq() > 0 && this.#inertiaValue > 0) {
-          if (this.#shouldDragModified()) {
+          const shouldDragModified = this.#shouldDragModified();
+          if (shouldDragModified) {
             _vec.copy(this.#dragInertia).multiplyScalar(this.#inertiaValue);
-            this.#modifiedDrag(_vec);
+            const angle = _vec.length();
+            if (angle > THRESHOLD) {
+              _axis.copy(_vec).multiplyScalar(1 / angle);
+              _quaternion.setFromAxisAngle(_axis, angle);
+              this.#applyCameraRotationAroundOrigin(_quaternion);
+            }
             this.#finalizeCamera();
           } else {
             _vec.copy(this.#dragInertia).multiplyScalar(this.#inertiaValue);
             this.#camera.position.sub(_vec);
             this.#finalizeCamera();
+          }
+          if (!shouldDragModified && this.#shouldDragModified()) {
+            this.#initializeDragAnchor();
           }
         }
         if (
@@ -643,6 +623,8 @@ class CameraController extends EventDispatcher {
         this.#zoomDelta = delta * 4000;
       }
       if (this.#zoomDelta !== 0) {
+        this.#rotateInertia.set(0, 0);
+        this.#dragInertia.set(0, 0, 0);
         if (this.#zoomTimeout !== null) {
           clearTimeout(this.#zoomTimeout);
           this.#zoomTimeout = null;
@@ -705,15 +687,12 @@ class CameraController extends EventDispatcher {
       clearTimeout(this.#zoomTimeout);
       this.#zoomTimeout = null;
     }
-    this.#domElement.removeEventListener('contextmenu', this.#contextMenuEvent);
-    this.#domElement.removeEventListener('pointerdown', this.#pointerDownEvent);
-    this.#domElement.removeEventListener('pointermove', this.#pointerMoveEvent);
-    this.#domElement.removeEventListener('pointerup', this.#pointerUpEvent);
-    this.#domElement.removeEventListener('wheel', this.#wheelEvent);
-    this.#domElement.removeEventListener(
-      'pointerenter',
-      this.#pointerEnterEvent,
-    );
+    this.#domElement.removeEventListener('contextmenu', this.#contextMenu);
+    this.#domElement.removeEventListener('pointerdown', this.#pointerDown);
+    this.#domElement.removeEventListener('pointermove', this.#pointerMove);
+    this.#domElement.removeEventListener('pointerup', this.#pointerUp);
+    this.#domElement.removeEventListener('wheel', this.#wheel);
+    this.#domElement.removeEventListener('pointerenter', this.#pointerEnter);
     this.#pivotMesh.removeFromParent();
     this.#pivotMesh.dispose();
     this.#domElement.style.touchAction = '';
@@ -721,12 +700,12 @@ class CameraController extends EventDispatcher {
     this.#ellipsoid = null;
   }
   #bindEvents() {
-    this.#domElement.addEventListener('contextmenu', this.#contextMenuEvent);
-    this.#domElement.addEventListener('pointerdown', this.#pointerDownEvent);
-    this.#domElement.addEventListener('pointermove', this.#pointerMoveEvent);
-    this.#domElement.addEventListener('pointerup', this.#pointerUpEvent);
-    this.#domElement.addEventListener('wheel', this.#wheelEvent);
-    this.#domElement.addEventListener('pointerenter', this.#pointerEnterEvent);
+    this.#domElement.addEventListener('contextmenu', this.#contextMenu);
+    this.#domElement.addEventListener('pointerdown', this.#pointerDown);
+    this.#domElement.addEventListener('pointermove', this.#pointerMove);
+    this.#domElement.addEventListener('pointerup', this.#pointerUp);
+    this.#domElement.addEventListener('wheel', this.#wheel);
+    this.#domElement.addEventListener('pointerenter', this.#pointerEnter);
   }
   #contextMenu = (e) => {
     e.preventDefault();
@@ -870,29 +849,27 @@ class CameraController extends EventDispatcher {
     }
   };
   #finalizeCamera() {
-    this.#limitCameraDistance();
-    this.#keepCameraUp();
+    const fixedPoint =
+      this.#hit && this.#hit.distance > 0 ? this.#hit.point : undefined;
+    this.#limitCameraDistance(fixedPoint);
+    if (fixedPoint && !this.#isCameraCenterMode()) {
+      this.#keepCameraUp(fixedPoint);
+    } else {
+      this.#keepCameraUp();
+    }
     this.#camera.updateMatrixWorld();
   }
-  #alignCameraRightToXYPlane() {
-    this.#camera.getWorldDirection(_forward);
-    _up.copy(this.#camera.up).transformDirection(this.#camera.matrixWorld);
-    _vec1.crossVectors(_forward, _up).normalize();
-    _right.copy(_vec1).projectOnPlane(_worldZ);
-    if (_right.lengthSq() <= THRESHOLD * THRESHOLD) {
-      _right.crossVectors(_forward, _worldZ);
+  #getPositionUpDirection(position, target) {
+    if (this.#ellipsoid) {
+      this.#ellipsoid.getPositionToNormal(position, target);
+      if (target.lengthSq() > THRESHOLD * THRESHOLD) {
+        return target;
+      }
     }
-    if (_right.lengthSq() <= THRESHOLD * THRESHOLD) {
-      return;
+    if (position.lengthSq() > THRESHOLD * THRESHOLD) {
+      return target.copy(position).normalize();
     }
-    _right.normalize();
-    if (_right.dot(_vec1) < 0) {
-      _right.negate();
-    }
-    _localUp.crossVectors(_right, _forward).normalize();
-    _vec2.copy(_forward).negate();
-    _rotMatrix.makeBasis(_right, _localUp, _vec2);
-    this.#camera.quaternion.setFromRotationMatrix(_rotMatrix);
+    return target.copy(_worldZ);
   }
   #rotateNearAnchor(rotateVec) {
     if (!this.#hit) {
@@ -982,9 +959,9 @@ class CameraController extends EventDispatcher {
     this.#camera.getWorldDirection(_forward);
     _up.copy(this.#camera.up).transformDirection(this.#camera.matrixWorld);
     _right.crossVectors(_forward, _up).normalize();
-    _localUp.copy(this.#hit.point).normalize();
-    _vec6.copy(this.#camera.position).normalize();
-    const cameraVerticalAngle = Math.PI - _forward.angleTo(_vec6);
+    this.#getPositionUpDirection(this.#hit.point, _localUp);
+    this.#getPositionUpDirection(this.#camera.position, _positionUp);
+    const cameraVerticalAngle = Math.PI - _forward.angleTo(_positionUp);
     const maxVerticalAngle = Math.PI - THRESHOLD;
     const minVerticalAngle = THRESHOLD;
     let verticalAngle = Math.min(
@@ -1025,16 +1002,9 @@ class CameraController extends EventDispatcher {
       return;
     }
     this.#dragAnchorPoint.copy(this.#hit.point);
-    this.#dragStartPosition.copy(this.#camera.position);
-    this.#dragStartQuaternion.copy(this.#camera.quaternion);
-    this.#camera.getWorldDirection(this.#dragPlaneNormal);
-  }
-  #restoreDragStartCamera() {
-    this.#camera.position.copy(this.#dragStartPosition);
-    this.#camera.quaternion.copy(this.#dragStartQuaternion);
-    this.#camera.updateMatrixWorld();
   }
   #intersectDragPlane(pointer, target) {
+    this.#camera.getWorldDirection(this.#dragPlaneNormal);
     _plane.setFromNormalAndCoplanarPoint(
       this.#dragPlaneNormal,
       this.#dragAnchorPoint,
@@ -1042,111 +1012,66 @@ class CameraController extends EventDispatcher {
     setRaycasterFromCamera(this.#raycaster, pointer, this.#camera);
     return this.#raycaster.ray.intersectPlane(_plane, target) !== null;
   }
-  #modifiedDrag(rotateVec) {
-    if (!this.#hit || this.#hit.distance <= 0) {
+  #modifiedDrag(pointer) {
+    if (!this.#hit || this.#hit.distance <= 0 || this.#hit.virtual) {
+      return false;
+    }
+    const radius = this.#dragAnchorPoint.length();
+    if (radius <= THRESHOLD) {
+      return false;
+    }
+    _dragEllipsoid.radius.setScalar(radius);
+    setRaycasterFromCamera(this.#raycaster, pointer, this.#camera);
+    if (!_dragEllipsoid.intersectRay(this.#raycaster.ray, _vec1)) {
+      return false;
+    }
+    _vec2.copy(_vec1).normalize();
+    if (this.#raycaster.ray.direction.dot(_vec2) > 0) {
+      return false;
+    }
+    _vec1.normalize();
+    _vec2.copy(this.#dragAnchorPoint).normalize();
+    _quaternion.setFromUnitVectors(_vec1, _vec2);
+    this.#setModifiedDragInertia(_quaternion);
+    this.#applyCameraRotationAroundOrigin(_quaternion);
+    return true;
+  }
+  #setModifiedDragInertia(rotation) {
+    _axis.set(rotation.x, rotation.y, rotation.z);
+    if (rotation.w < 0) {
+      _axis.negate();
+    }
+    const axisLength = _axis.length();
+    if (axisLength <= THRESHOLD) {
+      this.#dragInertia.set(0, 0, 0);
       return;
     }
-    this.#camera.getWorldDirection(_forward);
-    _up.copy(this.#camera.up).transformDirection(this.#camera.matrixWorld);
-    _right.crossVectors(_forward, _up).normalize();
-    _vec1.copy(rotateVec).projectOnVector(_right);
-    _vec2.copy(rotateVec).projectOnVector(_up);
-    const length = this.#hit.point.length();
-    let verticalAngle =
-      Math.atan2(_vec2.length(), length) * Math.sign(_vec2.dot(_up));
-    let horizontalAngle =
-      -Math.atan2(_vec1.length(), length) * Math.sign(_vec1.dot(_right));
-    this.#camera.getWorldDirection(_vec4).negate();
-    const angle = _vec4.angleTo(this.#camera.position);
-    const cos = Math.cos(angle);
-    verticalAngle /= cos;
-    horizontalAngle /= cos;
-    // Rotate around the right axis
-    _quaternion.setFromAxisAngle(_right, verticalAngle);
-    makeRotateAroundPoint(_vec3.set(0, 0, 0), _quaternion, _rotMatrix);
+    const angle = 2 * Math.atan2(axisLength, Math.abs(rotation.w));
+    this.#dragInertia.copy(_axis).multiplyScalar(angle / axisLength);
+  }
+  #applyCameraRotationAroundOrigin(rotation) {
+    makeRotateAroundPoint(_vec3.set(0, 0, 0), rotation, _rotMatrix);
     this.#camera.matrixWorld.premultiply(_rotMatrix);
-    // Rotate around the up axis
-    _quaternion.setFromAxisAngle(_up, horizontalAngle);
-    makeRotateAroundPoint(_vec3.set(0, 0, 0), _quaternion, _rotMatrix);
-    this.#camera.matrixWorld.premultiply(_rotMatrix);
-    // Explicitly set the quaternion before decomposing
     this.#camera.matrixWorld.decompose(
       this.#camera.position,
       this.#camera.quaternion,
       _vec3,
     );
   }
-  #keepCameraUpAtFixedPoint(fixedPoint) {
-    this.#camera.updateMatrixWorld();
-    _invMatrix.copy(this.#camera.matrixWorld).invert();
-    _vec1.copy(fixedPoint).applyMatrix4(_invMatrix);
-    let clampToGlobeHorizon = false;
-    if (this.#ellipsoid && !this.#isCameraCenterMode()) {
-      const surfacePoint = this.#ellipsoid.getPositionToSurfacePoint(
-        fixedPoint,
-        _fixedPointSurface,
-      );
-      if (surfacePoint) {
-        this.#ellipsoid.getPositionToNormal(
-          _fixedPointSurface,
-          _fixedPointNormal,
-        );
-        clampToGlobeHorizon =
-          _fixedPointNormal.lengthSq() > THRESHOLD * THRESHOLD;
-      }
-    }
-    this.#keepCameraUp();
-    this.#camera.updateMatrixWorld();
-    _vec2.copy(_vec1).applyMatrix4(this.#camera.matrixWorld);
-    _vec3.subVectors(fixedPoint, _vec2);
-    if (clampToGlobeHorizon) {
-      _vec4.copy(this.#camera.position).add(_vec3);
-      const candidateClearance = _vec5
-        .subVectors(_vec4, _fixedPointSurface)
-        .dot(_fixedPointNormal);
-
-      if (candidateClearance < 0) {
-        return;
-      }
-    }
-    this.#camera.position.add(_vec3);
-  }
-  #getZoomOutMetrics(source, baseScale = 1) {
-    const metrics = _zoomOutMetrics;
-    const minScale = 0;
-    metrics.distanceScale = baseScale;
-    if (!this.#ellipsoid || this.#isCameraCenterMode()) {
-      return metrics;
+  #getZoomDistanceScale(zoomAmount, source) {
+    if (zoomAmount >= 0 || !this.#ellipsoid || this.#isCameraCenterMode()) {
+      return 1;
     }
     const taperStartRadius = this.#ellipsoidMaxRadius * 1.5;
     const maxRadius = this.#ellipsoidMaxRadius * 2;
     const currentDistance = source.length();
-    if (currentDistance > taperStartRadius) {
-      if (currentDistance >= maxRadius) {
-        metrics.distanceScale = minScale;
-      } else {
-        const factor =
-          (maxRadius - currentDistance) / (maxRadius - taperStartRadius);
-        metrics.distanceScale = minScale + (baseScale - minScale) * factor;
-      }
+    if (currentDistance <= taperStartRadius) {
+      return 1;
     }
-    return metrics;
-  }
-  #getScaledZoomTarget(hit, zoomFactor, source, distanceScale, target) {
-    target
-      .copy(source)
-      .sub(hit.point)
-      .multiplyScalar(1 + (zoomFactor - 1) * distanceScale)
-      .add(hit.point);
-  }
-  #getZoomPosition(hit, zoomAmount, zoomFactor, target) {
-    const source = _vec4.copy(this.#camera.position);
-    let distanceScale = 1;
-    if (zoomAmount < 0 && this.#ellipsoid && !this.#isCameraCenterMode()) {
-      const metrics = this.#getZoomOutMetrics(source);
-      distanceScale = metrics.distanceScale;
+    if (currentDistance >= maxRadius) {
+      return 0;
     }
-    this.#getScaledZoomTarget(hit, zoomFactor, source, distanceScale, target);
+    return (maxRadius - currentDistance) / (maxRadius - taperStartRadius);
   }
   #applyZoom(zoomAmount) {
     const hit = this.#hit;
@@ -1171,12 +1096,18 @@ class CameraController extends EventDispatcher {
       this.#camera.zoom /= zoomFactor;
       this.#camera.updateProjectionMatrix();
     }
-    this.#getZoomPosition(hit, zoomAmount, zoomFactor, this.#camera.position);
+    const source = _vec4.copy(this.#camera.position);
+    const distanceScale = this.#getZoomDistanceScale(zoomAmount, source);
+    this.#camera.position
+      .copy(source)
+      .sub(hit.point)
+      .multiplyScalar(1 + (zoomFactor - 1) * distanceScale)
+      .add(hit.point);
     this.#limitCameraDistance(hit.point);
     if (this.#isCameraCenterMode()) {
       this.#camera.updateMatrixWorld();
     } else {
-      this.#keepCameraUpAtFixedPoint(hit.point);
+      this.#keepCameraUp(hit.point);
     }
     this.#camera.updateMatrixWorld();
     if (this.state === DRAG) {
@@ -1239,45 +1170,63 @@ class CameraController extends EventDispatcher {
     return (
       !!this.#ellipsoid &&
       !this.#isCameraCenterMode() &&
-      this.#camera.position.length() >= this.#ellipsoidMaxRadius + 100000
+      this.#camera.position.length() >= this.#ellipsoidMaxRadius * 1.05
     );
   }
-  #keepCameraUp() {
-    _vec6.copy(this.#camera.position);
-    const cameraPositionLength = _vec6.length();
-    if (cameraPositionLength < CAMERA_CENTER_MODE_DISTANCE) {
-      this.#alignCameraRightToXYPlane();
-      return;
-    }
-    _localForward.copy(this.#camera.position).normalize();
+  #alignCameraRoll(referenceUp) {
+    _rollRotation.identity();
     this.#camera.getWorldDirection(_forward);
     _up.copy(this.#camera.up).transformDirection(this.#camera.matrixWorld);
     _right.crossVectors(_forward, _up).normalize();
-    _localRight.crossVectors(_up, _localForward);
+    _localRight.crossVectors(_up, referenceUp);
     if (_localRight.dot(_right) < 0) {
       _localRight.negate();
     }
     _quaternion.setFromUnitVectors(_right, _localRight);
     this.#camera.quaternion.premultiply(_quaternion);
-    // _localForward unchanged (position didn't change, only quaternion)
+    _rollRotation.premultiply(_quaternion);
     this.#camera.getWorldDirection(_forward);
     _up.copy(this.#camera.up).transformDirection(this.#camera.matrixWorld);
     _right.crossVectors(_forward, _up).normalize();
-    _localUp.crossVectors(_forward, _localForward);
+    _localUp.crossVectors(_forward, referenceUp);
     if (_localUp.dot(_right) < 0) {
-      const forwardAngle = _forward.angleTo(_localForward);
+      const forwardAngle = _forward.angleTo(referenceUp);
       if (forwardAngle < Math.PI / 2) {
-        _axis.crossVectors(_forward, _localForward).normalize();
+        _axis.crossVectors(_forward, referenceUp).normalize();
         _quaternion.setFromAxisAngle(_axis, forwardAngle);
         this.#camera.quaternion.premultiply(_quaternion);
+        _rollRotation.premultiply(_quaternion);
       } else {
         _axis
-          .crossVectors(_forward, _vec4.copy(_localForward).negate())
+          .crossVectors(_forward, _vec4.copy(referenceUp).negate())
           .normalize();
         const negatedAngle = _forward.angleTo(_vec4);
         _quaternion.setFromAxisAngle(_axis, negatedAngle);
         this.#camera.quaternion.premultiply(_quaternion);
+        _rollRotation.premultiply(_quaternion);
       }
+    }
+    return _rollRotation;
+  }
+  #canApplyCameraRollAroundAnchor(anchorPoint) {
+    return (
+      anchorPoint.dot(_vec3.subVectors(this.#camera.position, anchorPoint)) >= 0
+    );
+  }
+  #keepCameraUp(anchorPoint) {
+    // Near the ellipsoid centre the surface normal is unstable, so fall back to
+    // the world up direction.
+    if (this.#camera.position.length() < CAMERA_CENTER_MODE_DISTANCE) {
+      this.#alignCameraRoll(_worldZ);
+      return;
+    }
+    this.#getPositionUpDirection(this.#camera.position, _positionUp);
+    const rollRotation = this.#alignCameraRoll(_positionUp);
+    if (anchorPoint && this.#canApplyCameraRollAroundAnchor(anchorPoint)) {
+      this.#camera.position
+        .sub(anchorPoint)
+        .applyQuaternion(rollRotation)
+        .add(anchorPoint);
     }
   }
   #normalRaycastClosest(raycaster, objects) {
@@ -1300,12 +1249,10 @@ class CameraController extends EventDispatcher {
     const result = this.#isCameraCenterMode()
       ? undefined
       : this.#ellipsoid?.intersectRay(raycaster.ray, _vec6);
-    this.#ellipsoid?.getPositionToNormal(_vec6, _vec5);
-    const distance = _vec6.distanceTo(this.#camera.position);
     if (result) {
       return {
         point: _vec6.clone(),
-        distance: distance,
+        distance: _vec6.distanceTo(this.#camera.position),
         onGlobe: true,
       };
     }
