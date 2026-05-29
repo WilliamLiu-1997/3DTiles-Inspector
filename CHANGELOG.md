@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Changed
+
+- Moved the Coordinate toolbar section above Transform so coordinate inputs are easier to reach before transform controls.
+
 ### Fixed
 
 - Fixed globe camera drag and rotation stability by using ellipsoid surface normals for camera-up alignment and refreshing drag anchors when switching into high-altitude drag behavior.

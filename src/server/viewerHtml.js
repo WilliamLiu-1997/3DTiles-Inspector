@@ -908,6 +908,20 @@ function buildViewerHtml(viewerConfig) {
           </div>
           <div class="toolbar-section">
             <div class="toolbar-section-header">
+              <p class="toolbar-section-title">Coordinate</p>
+            </div>
+            <div class="coordinate-grid">
+              <label><span>Latitude</span><input id="latitude" type="number" step="any" value="0" /></label>
+              <label><span>Longitude</span><input id="longitude" type="number" step="any" value="0" /></label>
+              <label><span>Height</span><input id="height" type="number" step="any" value="0" /></label>
+            </div>
+            <div class="coordinate-actions">
+              <button id="move-camera-to-coordinate" class="wide" type="button">Move Camera</button>
+              <button id="move-tiles-to-coordinate" class="wide" type="button">Move Tiles</button>
+            </div>
+          </div>
+          <div class="toolbar-section">
+            <div class="toolbar-section-header">
               <p class="toolbar-section-title">Transform</p>
             </div>
             <div class="transform-actions">
@@ -935,20 +949,6 @@ function buildViewerHtml(viewerConfig) {
               </div>
               <button id="set-position" class="full-span" type="button">Set Position</button>
               <button id="reset" class="full-span" type="button">Reset</button>
-            </div>
-          </div>
-          <div class="toolbar-section">
-            <div class="toolbar-section-header">
-              <p class="toolbar-section-title">Coordinate</p>
-            </div>
-            <div class="coordinate-grid">
-              <label><span>Latitude</span><input id="latitude" type="number" step="any" value="0" /></label>
-              <label><span>Longitude</span><input id="longitude" type="number" step="any" value="0" /></label>
-              <label><span>Height</span><input id="height" type="number" step="any" value="0" /></label>
-            </div>
-            <div class="coordinate-actions">
-              <button id="move-camera-to-coordinate" class="wide" type="button">Move Camera</button>
-              <button id="move-tiles-to-coordinate" class="wide" type="button">Move Tiles</button>
             </div>
           </div>
           <div class="toolbar-section">
