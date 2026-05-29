@@ -1216,7 +1216,7 @@ class CameraController extends EventDispatcher {
   #keepCameraUp(anchorPoint) {
     // Near the ellipsoid centre the surface normal is unstable, so fall back to
     // the world up direction.
-    if (this.#camera.position.length() < CAMERA_CENTER_MODE_DISTANCE) {
+    if (this.#isCameraCenterMode()) {
       this.#alignCameraRoll(_worldZ);
       return;
     }
