@@ -6,9 +6,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-06-01
+
 ### Changed
 
 - Moved the Coordinate toolbar section above Transform so coordinate inputs are easier to reach before transform controls.
+- Updated `3d-tiles-renderer` from `0.4.25` to `0.4.27` and `3d-tiles-rendererjs-3dgs-plugin` from `0.1.8` to `0.1.11`.
 
 ### Fixed
 
