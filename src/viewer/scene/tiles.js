@@ -1,4 +1,3 @@
-import { Ion } from 'cesium';
 import { TilesRenderer } from '3d-tiles-renderer';
 import { ImplicitTilingPlugin } from '3d-tiles-renderer/src/core/plugins/ImplicitTilingPlugin.js';
 import { CesiumIonAuthPlugin } from '3d-tiles-renderer/src/three/plugins/CesiumIonAuthPlugin.js';
@@ -22,7 +21,6 @@ const SATELLITE_IMAGERY = {
   levels: 18,
 };
 const CESIUM_ION_TERRAIN = {
-  apiToken: Ion.defaultAccessToken,
   assetId: 1,
 };
 
@@ -73,13 +71,21 @@ export function createImageryGlobeTiles(options) {
 }
 
 export function createTerrainGlobeTiles(options) {
+  const apiToken =
+    typeof options.cesiumIonToken === 'string'
+      ? options.cesiumIonToken.trim()
+      : '';
+  if (!apiToken) {
+    throw new Error('Cesium ion token is required to enable terrain.');
+  }
+
   const next = new TilesRenderer();
   const satelliteOverlay = createSatelliteOverlay(options.preprocessURL);
   next.downloadQueue.maxJobs = 8;
   next.parseQueue.maxJobs = 2;
   next.registerPlugin(
     new CesiumIonAuthPlugin({
-      apiToken: CESIUM_ION_TERRAIN.apiToken,
+      apiToken,
       assetId: String(CESIUM_ION_TERRAIN.assetId),
       autoRefreshToken: true,
       assetTypeHandler: (type, tilesRenderer) => {

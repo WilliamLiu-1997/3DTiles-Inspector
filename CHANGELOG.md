@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-06-02
+
+### Changed
+
+- Changed terrain to default off and require a user-entered Cesium ion token before enabling Cesium World Terrain.
+- Removed the unused direct `cesium` development dependency.
+
 ## [0.2.12] - 2026-06-01
 
 ### Changed

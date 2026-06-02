@@ -1,5 +1,6 @@
 export function createViewerToggles({
   boundingVolumeButton,
+  cesiumIonTokenInput,
   globeController,
   setStatus,
   terrainButton,
@@ -19,8 +20,23 @@ export function createViewerToggles({
   }
 
   function setTerrainEnabled(enabled) {
-    globeController.setTerrainEnabled(enabled);
-    syncTerrainButton();
+    try {
+      const cesiumIonToken = cesiumIonTokenInput?.value?.trim() || '';
+      if (enabled && !cesiumIonToken) {
+        cesiumIonTokenInput?.focus();
+        setStatus('Enter a Cesium ion token to enable terrain.', true);
+        syncTerrainButton();
+        return false;
+      }
+
+      globeController.setTerrainEnabled(enabled, { cesiumIonToken });
+      syncTerrainButton();
+      return true;
+    } catch (err) {
+      setStatus(err && err.message ? err.message : String(err), true);
+      syncTerrainButton();
+      return false;
+    }
   }
 
   function syncBoundingVolumeButton() {

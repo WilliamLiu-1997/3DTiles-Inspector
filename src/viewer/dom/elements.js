@@ -4,6 +4,7 @@ export function getViewerElements() {
   return {
     boundingVolumeButton: document.getElementById('bounding-volume'),
     cacheBytesValueEl: document.getElementById('cache-bytes-value'),
+    cesiumIonTokenInput: document.getElementById('cesium-ion-token'),
     cropCountValueEl: document.getElementById('crop-count-value'),
     cropListEl: document.getElementById('crop-list'),
     cropSectionEl: document.getElementById('crop-section'),

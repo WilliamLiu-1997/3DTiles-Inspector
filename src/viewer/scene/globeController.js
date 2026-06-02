@@ -11,11 +11,12 @@ export function createGlobeController({
   renderer,
 }) {
   let tiles = null;
-  let terrainEnabled = true;
+  let terrainEnabled = false;
 
-  function setTerrainEnabled(enabled) {
+  function setTerrainEnabled(enabled, { cesiumIonToken = '' } = {}) {
     const globeTileOptions = {
       camera,
+      cesiumIonToken,
       preprocessURL: normalizeLocalResourceUrl,
       renderer,
     };

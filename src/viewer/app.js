@@ -46,6 +46,7 @@ const viewerElements = getViewerElements();
 const {
   boundingVolumeButton,
   cacheBytesValueEl,
+  cesiumIonTokenInput,
   cropSectionEl,
   geometricErrorLayerScaleInput,
   geometricErrorLayerValueEl,
@@ -142,6 +143,7 @@ const globeController = createGlobeController({
 
 const viewerToggles = createViewerToggles({
   boundingVolumeButton,
+  cesiumIonTokenInput,
   globeController,
   setStatus,
   terrainButton,

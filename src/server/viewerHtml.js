@@ -654,6 +654,34 @@ function buildViewerHtml(viewerConfig) {
         background: rgba(255, 255, 255, 0.92);
       }
 
+      .token-field {
+        display: grid;
+        gap: 5px;
+        min-width: 0;
+      }
+
+      .token-field span {
+        min-width: 0;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #5d738b;
+      }
+
+      .token-field input {
+        width: 100%;
+        min-width: 0;
+        padding: 8px 10px;
+        border: 1px solid rgba(22, 50, 79, 0.16);
+        border-radius: 10px;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        color: #16324f;
+        background: rgba(255, 255, 255, 0.92);
+      }
+
       .coordinate-actions {
         display: grid;
         grid-template-columns: 1fr;
@@ -901,6 +929,17 @@ function buildViewerHtml(viewerConfig) {
               <p class="toolbar-section-title">Canvas</p>
             </div>
             <div class="coordinate-actions">
+              <label class="token-field">
+                <span>Cesium ion token</span>
+                <input
+                  id="cesium-ion-token"
+                  type="password"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  placeholder="Required for terrain"
+                />
+              </label>
               <button id="terrain" class="wide" type="button">Terrain</button>
               <button id="bounding-volume" class="wide" type="button">Bounding Volume</button>
               <button id="move-to-tiles" type="button">Move To Tiles</button>

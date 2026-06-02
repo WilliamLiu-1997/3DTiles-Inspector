@@ -156,7 +156,9 @@ export function bindViewerEvents({
     handlers.toggleToolbarVisibility,
   );
   terrainButton.addEventListener('click', () => {
-    handlers.setTerrainEnabled(!getTerrainEnabled());
+    if (!handlers.setTerrainEnabled(!getTerrainEnabled())) {
+      return;
+    }
     setStatus(
       getTerrainEnabled()
         ? 'Terrain enabled with Cesium World Terrain.'

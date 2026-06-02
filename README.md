@@ -89,7 +89,7 @@ const {
 - `Move Camera` to a WGS84 latitude / longitude / height
 - `Move Tiles` to relocate the tileset root with an ENU-aligned transform
 - `Set Position` to click the globe, terrain, or loaded tiles and place the tileset there
-- `Terrain` to toggle Cesium World Terrain while keeping satellite imagery
+- `Terrain`, off by default, to toggle Cesium World Terrain after entering a Cesium ion token, while keeping satellite imagery
 - `Geometric Error` scaling from `1/16x` to `16x`
 - `Layer Multiplier` scaling from `1/8x` to `8x` for each tile's geometric-error difference from the tileset's global leaf baseline
 - `Crop Regions` for drawing screen-space exclude regions on 3D Gaussian Splat tilesets
