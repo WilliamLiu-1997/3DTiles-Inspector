@@ -2,6 +2,23 @@ const { InspectorError } = require('../../errors');
 const { normalizeMatrix4Array } = require('./normalize');
 const { getNodeLocalMatrix } = require('./gltfResource');
 
+const KHR_GAUSSIAN_SPLATTING_EXTENSION = 'KHR_gaussian_splatting';
+const KHR_GAUSSIAN_SPLATTING_SPZ_EXTENSION =
+  'KHR_gaussian_splatting_compression_spz_2';
+const EXT_SPLAT_OPACITY_EXTENSION = 'EXT_splat_opacity';
+
+function getGaussianSplattingExtensions(primitive) {
+  return primitive?.extensions?.[KHR_GAUSSIAN_SPLATTING_EXTENSION]?.extensions;
+}
+
+function getGaussianSplatOpacityExtension(primitive) {
+  const extensions = getGaussianSplattingExtensions(primitive);
+  return (
+    extensions?.[EXT_SPLAT_OPACITY_EXTENSION] ??
+    primitive?.extensions?.[EXT_SPLAT_OPACITY_EXTENSION]
+  );
+}
+
 function getTileLocalTransform(THREE, tile) {
   const matrix = new THREE.Matrix4();
   if (Array.isArray(tile?.transform)) {
@@ -37,10 +54,22 @@ function getRootUpRotationMatrix(THREE, tileset) {
 }
 
 function primitiveHasGaussianSpzExtension(primitive) {
-  return (
-    primitive?.extensions?.KHR_gaussian_splatting?.extensions
-      ?.KHR_gaussian_splatting_compression_spz_2 != null
-  );
+  const extensions = getGaussianSplattingExtensions(primitive);
+  return extensions?.[KHR_GAUSSIAN_SPLATTING_SPZ_EXTENSION] != null;
+}
+
+function getGaussianSplatOpacityAccessorIndex(primitive) {
+  const opacityAccessor = getGaussianSplatOpacityExtension(primitive)
+    ?.opacityAccessor;
+  if (opacityAccessor == null) {
+    return null;
+  }
+  if (!Number.isInteger(opacityAccessor) || opacityAccessor < 0) {
+    throw new InspectorError(
+      'EXT_splat_opacity opacityAccessor must be a non-negative integer.',
+    );
+  }
+  return opacityAccessor;
 }
 
 function collectGaussianPrimitiveDescriptors(
@@ -87,12 +116,12 @@ function collectGaussianPrimitiveDescriptors(
       const mesh = meshes[node.mesh];
       if (mesh && Array.isArray(mesh.primitives)) {
         mesh.primitives.forEach((primitive, primitiveIndex) => {
+          const extensions = getGaussianSplattingExtensions(primitive);
           const gaussianExtension =
-            primitive?.extensions?.KHR_gaussian_splatting?.extensions
-              ?.KHR_gaussian_splatting_compression_spz_2;
+            extensions?.[KHR_GAUSSIAN_SPLATTING_SPZ_EXTENSION];
           const bufferView = gaussianExtension?.bufferView;
           if (bufferView == null) {
-            if (primitive?.extensions?.KHR_gaussian_splatting) {
+            if (primitive?.extensions?.[KHR_GAUSSIAN_SPLATTING_EXTENSION]) {
               throw new InspectorError(
                 'Only KHR_gaussian_splatting_compression_spz_2 Gaussian primitives are supported for crop deletion.',
               );
@@ -288,6 +317,7 @@ function updateGaussianPrimitiveAccessorCounts(resource, descriptors, count) {
 
 module.exports = {
   collectGaussianPrimitiveDescriptors,
+  getGaussianSplatOpacityAccessorIndex,
   getRootUpRotationMatrix,
   getTileLocalTransform,
   getTileWorldTransform,

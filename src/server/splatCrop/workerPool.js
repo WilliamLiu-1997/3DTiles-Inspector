@@ -110,6 +110,8 @@ class SplatCropWorkerPool {
         deleted: Number(result.deleted || 0),
         empty: !!result.empty,
         splatCount: Number(result.splatCount || 0),
+        survivors:
+          result.survivors instanceof Uint32Array ? result.survivors : null,
         survivorCount: Number(result.survivorCount || 0),
       });
     }

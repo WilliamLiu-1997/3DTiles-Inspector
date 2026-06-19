@@ -131,6 +131,26 @@ function getGaussianAccessorCounts(gltf) {
   );
 }
 
+function writeFloat32Values(values, { byteOffset = 0, byteStride = 4 } = {}) {
+  const byteLength =
+    values.length === 0
+      ? byteOffset
+      : byteOffset + (values.length - 1) * byteStride + 4;
+  const bytes = Buffer.alloc(byteLength);
+  values.forEach((value, index) => {
+    bytes.writeFloatLE(value, byteOffset + index * byteStride);
+  });
+  return bytes;
+}
+
+function readFloat32Values(bytes) {
+  const values = [];
+  for (let offset = 0; offset < bytes.length; offset += 4) {
+    values.push(bytes.readFloatLE(offset));
+  }
+  return values;
+}
+
 function makeRawSpzLayout(pointCount, shDegree) {
   const shVecs = SPZ_SH_VECS_BY_DEGREE[shDegree];
   const positionsOffset = 16;
@@ -612,6 +632,110 @@ async function assertCropSaveUpdatesAccessorCounts(baseDir) {
     1,
     1,
   ]);
+}
+
+async function assertCropSaveRewritesOpacityExtensionAccessor(
+  baseDir,
+  { legacyPlacement = false, strided = false } = {},
+) {
+  const opacityDir = path.join(
+    baseDir,
+    `crop-opacity-extension-${legacyPlacement ? 'legacy' : 'nested'}${
+      strided ? '-strided' : ''
+    }`,
+  );
+  fs.mkdirSync(opacityDir);
+
+  const spzBytes = await createSpzBytes([
+    [0, 0, 0],
+    [0.5, 0, 0],
+    [3, 0, 0],
+  ]);
+  const opacityValues = [2, 7, 13.5];
+  const accessorByteOffset = strided ? 4 : 0;
+  const sourceByteStride = strided ? 8 : 4;
+  const opacityBytes = writeFloat32Values(opacityValues, {
+    byteOffset: accessorByteOffset,
+    byteStride: sourceByteStride,
+  });
+  const opacityOffset = alignToFour(spzBytes.length);
+  const binBytes = Buffer.concat([
+    spzBytes,
+    Buffer.alloc(opacityOffset - spzBytes.length),
+    opacityBytes,
+  ]);
+
+  const tilesetPath = path.join(opacityDir, 'tileset.json');
+  const gltfPath = path.join(opacityDir, 'splats.gltf');
+  const binPath = path.join(opacityDir, 'splats.bin');
+  const gltf = makeGaussianGltf('splats.bin', binBytes.length, [
+    { buffer: 0, byteOffset: 0, byteLength: spzBytes.length },
+  ]);
+  const opacityBufferViewIndex = gltf.bufferViews.length;
+  const opacityAccessorIndex = 0;
+  gltf.bufferViews.push({
+    buffer: 0,
+    byteOffset: opacityOffset,
+    byteLength: opacityBytes.length,
+    ...(strided ? { byteStride: sourceByteStride } : {}),
+  });
+  gltf.accessors = [
+    {
+      bufferView: opacityBufferViewIndex,
+      ...(strided ? { byteOffset: accessorByteOffset } : {}),
+      componentType: 5126,
+      count: opacityValues.length,
+      max: [13.5],
+      min: [2],
+      type: 'SCALAR',
+    },
+  ];
+  const primitive = gltf.meshes[0].primitives[0];
+  const opacityExtension = {
+    opacityAccessor: opacityAccessorIndex,
+  };
+  if (legacyPlacement) {
+    primitive.extensions.EXT_splat_opacity = opacityExtension;
+  } else {
+    primitive.extensions.KHR_gaussian_splatting.extensions.EXT_splat_opacity =
+      opacityExtension;
+  }
+  gltf.extensionsUsed.push('EXT_splat_opacity');
+
+  fs.writeFileSync(binPath, binBytes);
+  fs.writeFileSync(gltfPath, JSON.stringify(gltf), 'utf8');
+  writeSplatTileset(tilesetPath, 'splats.gltf');
+
+  await assertCropSaveDeletesTwoSplats({
+    tilesetPath,
+    readSpzBytes: () => readGltfBufferViewBytes(gltfPath, binPath),
+  });
+
+  const rewrittenGltf = JSON.parse(fs.readFileSync(gltfPath, 'utf8'));
+  const rewrittenOpacityExtension =
+    rewrittenGltf.meshes[0].primitives[0].extensions.KHR_gaussian_splatting
+      .extensions.EXT_splat_opacity ??
+    rewrittenGltf.meshes[0].primitives[0].extensions.EXT_splat_opacity;
+  const accessor =
+    rewrittenGltf.accessors[rewrittenOpacityExtension.opacityAccessor];
+  assert.strictEqual(accessor.count, 1);
+  assert.strictEqual(accessor.byteOffset, undefined);
+  assert.deepStrictEqual(accessor.min, [13.5]);
+  assert.deepStrictEqual(accessor.max, [13.5]);
+  assert.strictEqual(
+    rewrittenGltf.bufferViews[accessor.bufferView].byteStride,
+    undefined,
+  );
+  assert.strictEqual(
+    rewrittenGltf.bufferViews[accessor.bufferView].byteLength,
+    4,
+  );
+  assert.deepStrictEqual(
+    readFloat32Values(
+      readGltfBufferViewBytes(gltfPath, binPath, accessor.bufferView),
+    ),
+    [13.5],
+  );
 }
 
 async function assertCropSavePrunesFullyDeletedSplatTile(baseDir) {
@@ -1271,6 +1395,11 @@ async function main() {
     await assertCropSavePrunesFullyDeletedSplatTile(tempDir);
     await assertCropSaveDeletesFullyDeletedGlbFile(tempDir);
     await assertCropSaveUpdatesAccessorCounts(tempDir);
+    await assertCropSaveRewritesOpacityExtensionAccessor(tempDir);
+    await assertCropSaveRewritesOpacityExtensionAccessor(tempDir, {
+      legacyPlacement: true,
+      strided: true,
+    });
     await assertCropSaveRawCopiesSurvivingSpzBytes(tempDir);
     await assertCropTraversalLimitsResourceConcurrency(tempDir);
 

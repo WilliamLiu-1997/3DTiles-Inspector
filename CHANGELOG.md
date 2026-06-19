@@ -6,6 +6,17 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-06-19
+
+### Changed
+
+- Updated `3d-tiles-rendererjs-3dgs-plugin` from `0.1.11` to `0.1.14`.
+- Updated `3d-tiles-renderer` from `0.4.27` to `0.4.28`.
+
+### Added
+
+- Added crop save support for SPZ Gaussian splats with `EXT_splat_opacity` so the opacity accessor data is cropped with the SPZ payload.
+
 ## [0.2.13] - 2026-06-02
 
 ### Changed

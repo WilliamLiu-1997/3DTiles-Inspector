@@ -16,6 +16,7 @@ const {
 } = require('./gltfResource');
 const {
   collectGaussianPrimitiveDescriptors,
+  getGaussianSplatOpacityAccessorIndex,
   getTileLocalTransform,
   hasNonGaussianScenePrimitives,
   hasScenePrimitives,
@@ -23,6 +24,10 @@ const {
   updateGaussianPrimitiveAccessorCounts,
 } = require('./gaussianPrimitives');
 const { SPLAT_CROP_WORKER_COUNT } = require('./workerPool');
+
+const ACCESSOR_COMPONENT_TYPE_FLOAT = 5126;
+const ACCESSOR_TYPE_SCALAR = 'SCALAR';
+const FLOAT32_BYTE_LENGTH = 4;
 
 class AsyncLimiter {
   constructor(limit) {
@@ -618,6 +623,154 @@ function markSplatResourceProgress(context, resourcePath) {
   });
 }
 
+function getPrimitiveForDescriptor(resource, descriptor) {
+  if (
+    !Number.isInteger(descriptor.meshIndex) ||
+    !Number.isInteger(descriptor.primitiveIndex)
+  ) {
+    return null;
+  }
+  return resource.json.meshes?.[descriptor.meshIndex]?.primitives?.[
+    descriptor.primitiveIndex
+  ];
+}
+
+function getAccessorDefinition(resource, accessorIndex, label) {
+  const accessor = resource.json.accessors?.[accessorIndex];
+  if (!accessor || typeof accessor !== 'object') {
+    throw new InspectorError(`${label} references missing accessor ${accessorIndex}.`);
+  }
+  if (accessor.componentType !== ACCESSOR_COMPONENT_TYPE_FLOAT) {
+    throw new InspectorError(`${label} must use FLOAT componentType.`);
+  }
+  if (accessor.type !== ACCESSOR_TYPE_SCALAR) {
+    throw new InspectorError(`${label} must use SCALAR type.`);
+  }
+  if (accessor.sparse) {
+    throw new InspectorError(`${label} sparse accessors are not supported.`);
+  }
+  if (!Number.isInteger(accessor.bufferView)) {
+    throw new InspectorError(`${label} must reference a bufferView.`);
+  }
+  if (!Number.isInteger(accessor.count) || accessor.count < 0) {
+    throw new InspectorError(`${label} count must be a non-negative integer.`);
+  }
+
+  const byteOffset = Number(accessor.byteOffset ?? 0);
+  if (!Number.isInteger(byteOffset) || byteOffset < 0) {
+    throw new InspectorError(`${label} byteOffset must be a non-negative integer.`);
+  }
+  const bufferView = resource.json.bufferViews?.[accessor.bufferView];
+  if (!bufferView || typeof bufferView !== 'object') {
+    throw new InspectorError(`${label} references missing bufferView.`);
+  }
+  const byteStride = Number(bufferView.byteStride ?? FLOAT32_BYTE_LENGTH);
+  if (!Number.isInteger(byteStride) || byteStride < FLOAT32_BYTE_LENGTH) {
+    throw new InspectorError(
+      `${label} byteStride must be at least ${FLOAT32_BYTE_LENGTH}.`,
+    );
+  }
+
+  return { accessor, bufferView, byteOffset, byteStride };
+}
+
+function makeFloat32ScalarAccessorSubsetReplacement(
+  resource,
+  accessorIndex,
+  survivors,
+) {
+  const label = `EXT_splat_opacity accessor ${accessorIndex}`;
+  const { accessor, bufferView, byteOffset, byteStride } = getAccessorDefinition(
+    resource,
+    accessorIndex,
+    label,
+  );
+  const slice = getBufferViewSlice(resource, accessor.bufferView);
+  const sourceLength =
+    accessor.count === 0
+      ? 0
+      : (accessor.count - 1) * byteStride + FLOAT32_BYTE_LENGTH;
+  const sourceEnd = byteOffset + sourceLength;
+
+  if (sourceEnd > slice.bytes.length) {
+    throw new InspectorError(`${label} exceeds its bufferView.`);
+  }
+
+  const out = Buffer.allocUnsafe(survivors.length * FLOAT32_BYTE_LENGTH);
+  let min = Infinity;
+  let max = -Infinity;
+
+  for (let index = 0; index < survivors.length; index++) {
+    const sourceIndex = survivors[index];
+    if (
+      !Number.isInteger(sourceIndex) ||
+      sourceIndex < 0 ||
+      sourceIndex >= accessor.count
+    ) {
+      throw new InspectorError(`${label} survivor index is out of range.`);
+    }
+
+    const value = slice.bytes.readFloatLE(
+      byteOffset + sourceIndex * byteStride,
+    );
+    out.writeFloatLE(value, index * FLOAT32_BYTE_LENGTH);
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+
+  accessor.count = survivors.length;
+  delete accessor.byteOffset;
+  delete bufferView.byteStride;
+  if (survivors.length > 0) {
+    accessor.min = [min];
+    accessor.max = [max];
+  }
+
+  return {
+    bufferIndex: slice.bufferIndex,
+    bufferViewIndex: accessor.bufferView,
+    bytes: out,
+    end: slice.end,
+    start: slice.start,
+  };
+}
+
+function addGaussianSplatOpacityAccessorReplacements(
+  resource,
+  descriptors,
+  survivors,
+  replacementsByBuffer,
+) {
+  if (!(survivors instanceof Uint32Array) || survivors.length === 0) {
+    return 0;
+  }
+
+  const opacityAccessors = new Set();
+  descriptors.forEach((descriptor) => {
+    const primitive = getPrimitiveForDescriptor(resource, descriptor);
+    const accessorIndex = getGaussianSplatOpacityAccessorIndex(primitive);
+    if (accessorIndex !== null) {
+      opacityAccessors.add(accessorIndex);
+    }
+  });
+
+  let replacementCount = 0;
+  opacityAccessors.forEach((accessorIndex) => {
+    const replacement = makeFloat32ScalarAccessorSubsetReplacement(
+      resource,
+      accessorIndex,
+      survivors,
+    );
+    if (!replacementsByBuffer.has(replacement.bufferIndex)) {
+      replacementsByBuffer.set(replacement.bufferIndex, []);
+    }
+    addReplacement(replacementsByBuffer.get(replacement.bufferIndex), replacement);
+    replacementCount += 1;
+  });
+
+  return replacementCount;
+}
+
 async function processGltfResource({
   THREE,
   filePath,
@@ -679,6 +832,15 @@ async function processGltfResource({
       continue;
     }
     if (Number.isInteger(rewrite.survivorCount)) {
+      if (rewrite.deleted > 0) {
+        modified =
+          addGaussianSplatOpacityAccessorReplacements(
+            resource,
+            viewDescriptors,
+            rewrite.survivors,
+            replacementsByBuffer,
+          ) > 0 || modified;
+      }
       modified =
         updateGaussianPrimitiveAccessorCounts(
           resource,

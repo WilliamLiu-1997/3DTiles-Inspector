@@ -345,6 +345,7 @@ function rewriteSpzBytes({
     deleted,
     empty: false,
     splatCount: parsed.sourceCount,
+    survivors,
     survivorCount: survivors.length,
   };
 }
@@ -373,6 +374,11 @@ parentPort.on('message', async (message) => {
       bytes = getTransferableBytes(result.bytes);
       transferList.push(bytes.buffer);
     }
+    let survivors = null;
+    if (result.survivors) {
+      survivors = result.survivors;
+      transferList.push(survivors.buffer);
+    }
 
     parentPort.postMessage(
       {
@@ -383,6 +389,7 @@ parentPort.on('message', async (message) => {
           deleted: result.deleted,
           empty: result.empty,
           splatCount: result.splatCount,
+          survivors,
           survivorCount: result.survivorCount,
         },
       },
