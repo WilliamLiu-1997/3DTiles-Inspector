@@ -380,6 +380,7 @@ class CameraController extends EventDispatcher {
   #lastTime;
   #hit;
   #pointerDownFilter;
+  #raycastHitFilter;
   #zoomTimeout;
   constructor(renderer, scene, camera, options = {}) {
     super();
@@ -416,6 +417,10 @@ class CameraController extends EventDispatcher {
     this.#pointerDownFilter =
       typeof options.pointerDownFilter === 'function'
         ? options.pointerDownFilter
+        : null;
+    this.#raycastHitFilter =
+      typeof options.raycastHitFilter === 'function'
+        ? options.raycastHitFilter
         : null;
     this.#zoomTimeout = null;
     this.init();
@@ -482,6 +487,10 @@ class CameraController extends EventDispatcher {
     this.#pointerDownFilter = typeof filter === 'function' ? filter : null;
     this.#resetState();
     this.#pointerTracker.reset();
+  }
+  setRaycastHitFilter(filter) {
+    this.#raycastHitFilter = typeof filter === 'function' ? filter : null;
+    this.#resetState();
   }
   init() {
     this.#domElement.style.touchAction = 'none';
@@ -1233,10 +1242,16 @@ class CameraController extends EventDispatcher {
     const targets = Array.isArray(objects) ? objects : [objects];
     if (targets.length === 0) return null;
     const intersects = raycaster.intersectObjects(targets, true);
-    if (intersects.length > 0) {
+    for (const intersection of intersects) {
+      if (
+        this.#raycastHitFilter &&
+        !this.#raycastHitFilter(intersection, raycaster)
+      ) {
+        continue;
+      }
       return {
-        point: intersects[0].point.clone(),
-        distance: intersects[0].point.distanceTo(this.#camera.position),
+        point: intersection.point.clone(),
+        distance: intersection.point.distanceTo(this.#camera.position),
       };
     }
     return null;

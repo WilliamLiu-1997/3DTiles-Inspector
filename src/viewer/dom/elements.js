@@ -11,6 +11,14 @@ export function getViewerElements() {
     cropScreenCancelButton: document.getElementById('crop-screen-cancel'),
     cropScreenConfirmButton: document.getElementById('crop-screen-confirm'),
     cropScreenSelectButton: document.getElementById('crop-screen-select'),
+    keepSphereCancelButton: document.getElementById('keep-sphere-cancel'),
+    keepSphereConfirmButton: document.getElementById('keep-sphere-confirm'),
+    keepSphereCreateButton: document.getElementById('keep-sphere-create'),
+    keepSphereListEl: document.getElementById('keep-sphere-list'),
+    keepSphereRadiusTrackEl: document.getElementById('keep-sphere-radius'),
+    keepSphereRadiusValueEl: document.getElementById(
+      'keep-sphere-radius-value',
+    ),
     geometricErrorLayerScaleInput: document.getElementById(
       'geometric-error-layer-scale',
     ),

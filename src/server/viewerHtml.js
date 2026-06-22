@@ -612,6 +612,11 @@ function buildViewerHtml(viewerConfig) {
           inset 0 -1px 0 rgba(73, 80, 87, 0.08);
       }
 
+      .scale-track.disabled {
+        cursor: default;
+        opacity: 0.48;
+      }
+
       .scale-track:focus {
         outline: none;
       }
@@ -698,6 +703,18 @@ function buildViewerHtml(viewerConfig) {
         flex-wrap: wrap;
         gap: 6px;
         min-height: 0;
+      }
+
+      .crop-subsection {
+        display: grid;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .crop-subsection + .crop-subsection {
+        margin-top: 6px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(22, 50, 79, 0.1);
       }
 
       .crop-list:empty {
@@ -1024,18 +1041,45 @@ function buildViewerHtml(viewerConfig) {
             </label>
           </div>
           <div id="crop-section" class="toolbar-section" hidden>
-            <div class="toolbar-section-header">
-              <p class="toolbar-section-title">Crop Regions</p>
-              <p id="crop-count-value" class="toolbar-value">0</p>
+            <div class="crop-subsection">
+              <div class="toolbar-section-header">
+                <p class="toolbar-section-title">Crop Sphere</p>
+                <p id="keep-sphere-radius-value" class="toolbar-value">None</p>
+              </div>
+              <div class="coordinate-actions">
+                <button id="keep-sphere-create" class="wide" type="button">Create Sphere</button>
+              </div>
+              <div class="range-field">
+                <div
+                  id="keep-sphere-radius"
+                  class="scale-track disabled"
+                  tabindex="0"
+                  aria-label="Crop sphere radius"
+                  aria-disabled="true"
+                >
+                  <span class="scale-track-center" aria-hidden="true"></span>
+                </div>
+              </div>
+              <div class="status-actions">
+                <button id="keep-sphere-confirm" type="button">Confirm</button>
+                <button id="keep-sphere-cancel" type="button">Cancel</button>
+              </div>
+              <div id="keep-sphere-list" class="crop-list"></div>
             </div>
-            <div class="coordinate-actions">
-              <button id="crop-screen-select" class="wide" type="button">Draw Region</button>
+            <div class="crop-subsection">
+              <div class="toolbar-section-header">
+                <p class="toolbar-section-title">Crop Regions</p>
+                <p id="crop-count-value" class="toolbar-value">0</p>
+              </div>
+              <div class="coordinate-actions">
+                <button id="crop-screen-select" class="wide" type="button">Draw Region</button>
+              </div>
+              <div class="status-actions">
+                <button id="crop-screen-confirm" type="button">Confirm</button>
+                <button id="crop-screen-cancel" type="button">Cancel</button>
+              </div>
+              <div id="crop-list" class="crop-list"></div>
             </div>
-            <div class="status-actions">
-              <button id="crop-screen-confirm" type="button">Confirm</button>
-              <button id="crop-screen-cancel" type="button">Cancel</button>
-            </div>
-            <div id="crop-list" class="crop-list"></div>
           </div>
         </div>
         <div class="toolbar-section status-panel">

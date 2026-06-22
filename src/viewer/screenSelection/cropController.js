@@ -1,6 +1,17 @@
-import { Sphere, Vector3 } from 'three';
+import {
+  BufferGeometry,
+  Float32BufferAttribute,
+  Group,
+  LineBasicMaterial,
+  LineSegments,
+  Matrix4,
+  Quaternion,
+  Sphere,
+  Vector3,
+} from 'three';
 import {
   SCREEN_SELECTION_ACTION_EXCLUDE,
+  SCREEN_SELECTION_ACTION_INCLUDE,
   createScreenSelection,
   createScreenSelectionEdit,
   createScreenSelectionFarHandle,
@@ -13,6 +24,7 @@ import {
   setScreenSelectionFarDepth,
   updateScreenSelectionWorldState,
 } from './index.js';
+import { applySphereSelectionSdf } from './sdf.js';
 import {
   clearOverlay,
   createSelectionData,
@@ -37,6 +49,122 @@ import { updateCropControls } from '../dom/cropUi.js';
 const CAMERA_POSITION_EPSILON_SQ = 1e-12;
 const CAMERA_QUATERNION_EPSILON = 1e-10;
 const CAMERA_PROJECTION_EPSILON = 1e-10;
+const KEEP_SPHERE_RADIUS_TRACK_PIXELS_PER_EXPONENT = 90;
+const KEEP_SPHERE_MIN_RADIUS = 1e-6;
+const KEEP_SPHERE_WIREFRAME_COLOR = 0xffffff;
+const KEEP_SPHERE_WIREFRAME_LATITUDE_SEGMENTS = 20;
+const KEEP_SPHERE_WIREFRAME_LONGITUDE_SEGMENTS = 80;
+const KEEP_SPHERE_WIREFRAME_MERIDIANS = 20;
+const KEEP_SPHERE_WIREFRAME_OVERLAY_OPACITY = 0.35;
+const KEEP_SPHERE_WIREFRAME_RENDER_ORDER = 1000001;
+const RAYCAST_CROP_EPSILON = 1e-6;
+
+function pushKeepSphereSegment(vertices, start, end) {
+  vertices.push(start[0], start[1], start[2], end[0], end[1], end[2]);
+}
+
+function createKeepSphereWireframeGeometry() {
+  const vertices = [];
+
+  for (
+    let latitudeIndex = 1;
+    latitudeIndex < KEEP_SPHERE_WIREFRAME_LATITUDE_SEGMENTS;
+    latitudeIndex++
+  ) {
+    const phi =
+      (Math.PI * latitudeIndex) / KEEP_SPHERE_WIREFRAME_LATITUDE_SEGMENTS;
+    const z = Math.cos(phi);
+    const ringRadius = Math.sin(phi);
+
+    for (
+      let longitudeIndex = 0;
+      longitudeIndex < KEEP_SPHERE_WIREFRAME_LONGITUDE_SEGMENTS;
+      longitudeIndex++
+    ) {
+      const theta0 =
+        (Math.PI * 2 * longitudeIndex) /
+        KEEP_SPHERE_WIREFRAME_LONGITUDE_SEGMENTS;
+      const theta1 =
+        (Math.PI * 2 * (longitudeIndex + 1)) /
+        KEEP_SPHERE_WIREFRAME_LONGITUDE_SEGMENTS;
+      pushKeepSphereSegment(
+        vertices,
+        [
+          Math.cos(theta0) * ringRadius,
+          Math.sin(theta0) * ringRadius,
+          z,
+        ],
+        [
+          Math.cos(theta1) * ringRadius,
+          Math.sin(theta1) * ringRadius,
+          z,
+        ],
+      );
+    }
+  }
+
+  for (
+    let meridianIndex = 0;
+    meridianIndex < KEEP_SPHERE_WIREFRAME_MERIDIANS;
+    meridianIndex++
+  ) {
+    const theta =
+      (Math.PI * 2 * meridianIndex) / KEEP_SPHERE_WIREFRAME_MERIDIANS;
+    const cosTheta = Math.cos(theta);
+    const sinTheta = Math.sin(theta);
+
+    for (
+      let latitudeIndex = 0;
+      latitudeIndex < KEEP_SPHERE_WIREFRAME_LATITUDE_SEGMENTS;
+      latitudeIndex++
+    ) {
+      const phi0 =
+        (Math.PI * latitudeIndex) / KEEP_SPHERE_WIREFRAME_LATITUDE_SEGMENTS;
+      const phi1 =
+        (Math.PI * (latitudeIndex + 1)) /
+        KEEP_SPHERE_WIREFRAME_LATITUDE_SEGMENTS;
+      pushKeepSphereSegment(
+        vertices,
+        [
+          cosTheta * Math.sin(phi0),
+          sinTheta * Math.sin(phi0),
+          Math.cos(phi0),
+        ],
+        [
+          cosTheta * Math.sin(phi1),
+          sinTheta * Math.sin(phi1),
+          Math.cos(phi1),
+        ],
+      );
+    }
+  }
+
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new Float32BufferAttribute(vertices, 3));
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+function createKeepSphereWireframeMaterial({ depthTest, opacity = 1 }) {
+  return new LineBasicMaterial({
+    color: KEEP_SPHERE_WIREFRAME_COLOR,
+    depthTest,
+    depthWrite: depthTest,
+    opacity,
+    transparent: opacity < 1,
+  });
+}
+
+function isGaussianSplatObject(object) {
+  let current = object;
+  while (current) {
+    if (current.userData?.gaussianSplat) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
 
 export function createCropController({
   camera,
@@ -53,6 +181,7 @@ export function createCropController({
   viewerElements,
   cancelOtherPositionPickModes,
   getCurrentRootTransformArray,
+  getLocalFrameQuaternion,
   getTilesetBoundingSphere,
 }) {
   let selections = [];
@@ -62,9 +191,22 @@ export function createCropController({
   let pendingMode = false;
   let pendingScreenEdit = null;
   let pendingEditDrag = null;
+  let keepSphere = null;
+  let keepSphereTrackDrag = null;
   let editCursor = '';
   let hasGaussianSplats = false;
   const sphere = new Sphere();
+  const rootMatrix = new Matrix4();
+  const rootInverseMatrix = new Matrix4();
+  const sphereWorldCenter = new Vector3();
+  const sphereLocalCenter = new Vector3();
+  const sphereWorldQuaternion = new Quaternion();
+  const raycastPlaneMatrix = new Matrix4();
+  const raycastPlanePosition = new Vector3();
+  const raycastPlaneQuaternion = new Quaternion();
+  const raycastPlaneScale = new Vector3();
+  const raycastPlaneNormal = new Vector3(0, 0, 1);
+  const raycastSphereCenter = new Vector3();
   const cameraForward = new Vector3();
   const screenEditOverlay = createScreenEditOverlay({ overlayEl, rectEl });
 
@@ -75,14 +217,182 @@ export function createCropController({
     return findSelection(activeSelectionId)?.selection || null;
   }
 
+  function isPointInsideScreenSelection(selection, point) {
+    if (!selection?.planeMatrices) {
+      return false;
+    }
+
+    for (const matrixArray of selection.planeMatrices) {
+      raycastPlaneMatrix.fromArray(matrixArray);
+      raycastPlaneMatrix.decompose(
+        raycastPlanePosition,
+        raycastPlaneQuaternion,
+        raycastPlaneScale,
+      );
+      raycastPlaneNormal
+        .set(0, 0, 1)
+        .applyQuaternion(raycastPlaneQuaternion)
+        .normalize();
+      const distance =
+        raycastPlaneNormal.dot(point) -
+        raycastPlaneNormal.dot(raycastPlanePosition);
+      if (distance > RAYCAST_CROP_EPSILON) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function isPointInsideCropSphere(selection, point) {
+    const radius = Number(selection?.worldRadius);
+    if (
+      !Array.isArray(selection?.worldCenter) ||
+      !Number.isFinite(radius) ||
+      radius <= 0
+    ) {
+      return true;
+    }
+
+    raycastSphereCenter.fromArray(selection.worldCenter);
+    return (
+      point.distanceToSquared(raycastSphereCenter) <=
+      radius * radius + RAYCAST_CROP_EPSILON
+    );
+  }
+
+  function isSplatPointVisibleForRaycast(point) {
+    for (const selection of selections) {
+      if (selection.id === activeSelectionId) {
+        continue;
+      }
+      if (isPointInsideScreenSelection(selection, point)) {
+        return false;
+      }
+    }
+
+    if (
+      keepSphere?.confirmed &&
+      keepSphere.id !== activeSelectionId &&
+      !isPointInsideCropSphere(keepSphere, point)
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function getCurrentRootMatrix(target = rootMatrix) {
+    return target.fromArray(getCurrentRootTransformArray());
+  }
+
+  function getCurrentRootScale() {
+    const scale = getCurrentRootMatrix(rootMatrix).getMaxScaleOnAxis();
+    return Number.isFinite(scale) && scale > 0 ? scale : 1;
+  }
+
+  function updateKeepSphereWorldState(selection = keepSphere) {
+    if (!selection) {
+      return;
+    }
+
+    getCurrentRootMatrix(rootMatrix);
+    sphereLocalCenter.fromArray(selection.localCenter);
+    sphereWorldCenter.copy(sphereLocalCenter).applyMatrix4(rootMatrix);
+    const rootScale = rootMatrix.getMaxScaleOnAxis();
+    const safeScale = Number.isFinite(rootScale) && rootScale > 0 ? rootScale : 1;
+    selection.worldCenter = sphereWorldCenter.toArray();
+    if (typeof getLocalFrameQuaternion === 'function') {
+      getLocalFrameQuaternion(sphereWorldCenter, sphereWorldQuaternion);
+    } else {
+      sphereWorldQuaternion.identity();
+    }
+    selection.worldQuaternion = sphereWorldQuaternion.toArray();
+    selection.worldRadius = Math.max(
+      KEEP_SPHERE_MIN_RADIUS,
+      selection.localRadius * safeScale,
+    );
+    applySphereSelectionSdf(selection);
+    updateKeepSphereWireframe(selection);
+  }
+
+  function createKeepSphereWireframe(selection) {
+    const group = new Group();
+    const geometry = createKeepSphereWireframeGeometry();
+    const visibleMaterial = createKeepSphereWireframeMaterial({
+      depthTest: true,
+    });
+    const overlayMaterial = createKeepSphereWireframeMaterial({
+      depthTest: false,
+      opacity: KEEP_SPHERE_WIREFRAME_OVERLAY_OPACITY,
+    });
+    const visibleWireframe = new LineSegments(geometry, visibleMaterial);
+    const overlayWireframe = new LineSegments(geometry, overlayMaterial);
+    visibleWireframe.renderOrder = KEEP_SPHERE_WIREFRAME_RENDER_ORDER;
+    overlayWireframe.renderOrder = KEEP_SPHERE_WIREFRAME_RENDER_ORDER + 1;
+    group.add(visibleWireframe);
+    group.add(overlayWireframe);
+    group.renderOrder = KEEP_SPHERE_WIREFRAME_RENDER_ORDER;
+    group.userData.keepSphereHandle = true;
+    group.userData.screenSelectionId = selection.id;
+    selection.wireframe = group;
+    selection.wireframeGeometry = geometry;
+    scene.add(group);
+    return group;
+  }
+
+  function updateKeepSphereWireframe(selection = keepSphere) {
+    if (!selection) {
+      return;
+    }
+    const wireframe = selection.wireframe || createKeepSphereWireframe(selection);
+    wireframe.position.fromArray(selection.worldCenter);
+    wireframe.quaternion.fromArray(selection.worldQuaternion);
+    wireframe.scale.setScalar(selection.worldRadius);
+    wireframe.visible =
+      !selection.confirmed || selection.id === activeSelectionId;
+    wireframe.updateMatrix();
+    wireframe.updateMatrixWorld(true);
+  }
+
+  function disposeKeepSphere(selection = keepSphere) {
+    if (!selection) {
+      return;
+    }
+    if (selection.edit) {
+      setScreenSelectionEditSelection(selection.edit, null, true);
+      selection.edit.removeFromParent();
+      selection.edit = null;
+    }
+    selection.sdfs?.forEach((sdf) => {
+      sdf.removeFromParent();
+    });
+    selection.sdfs = null;
+    if (selection.wireframe) {
+      selection.wireframe.traverse((object) => {
+        object.material?.dispose?.();
+      });
+      selection.wireframeGeometry?.dispose?.();
+      selection.wireframe.removeFromParent();
+      selection.wireframe = null;
+      selection.wireframeGeometry = null;
+    }
+  }
+
   function getEntries() {
-    return [
+    const entries = [
       ...selections.map((selection) => ({ style: 'exclude', selection })),
       ...pendingSelections.map((selection) => ({
         style: 'preview',
         selection,
       })),
     ];
+    if (keepSphere) {
+      entries.push({
+        style: keepSphere.confirmed ? 'include' : 'preview',
+        selection: keepSphere,
+      });
+    }
+    return entries;
   }
 
   function setEditCursor(cursor) {
@@ -218,6 +528,10 @@ export function createCropController({
   function syncWorldState() {
     const transform = getCurrentRootTransformArray();
     getEntries().forEach(({ selection }) => {
+      if (selection.type === 'sphere') {
+        updateKeepSphereWorldState(selection);
+        return;
+      }
       updateScreenSelectionWorldState(
         selection,
         transform,
@@ -239,6 +553,15 @@ export function createCropController({
         selection,
       })),
     ];
+    if (keepSphere) {
+      styled.push({
+        style:
+          keepSphere.confirmed && keepSphere.id !== activeSelectionId
+            ? 'include'
+            : 'preview',
+        selection: keepSphere,
+      });
+    }
 
     styled.forEach(({ style, selection }) => {
       if (!selection.edit) {
@@ -255,10 +578,13 @@ export function createCropController({
   }
 
   function syncFarHandles() {
-    const entries = getEntries();
+    const allEntries = getEntries();
+    const entries = allEntries.filter(
+      ({ selection }) => selection.type !== 'sphere',
+    );
     if (
       activeSelectionId != null &&
-      !entries.some(({ selection }) => selection.id === activeSelectionId)
+      !allEntries.some(({ selection }) => selection.id === activeSelectionId)
     ) {
       activeSelectionId = null;
     }
@@ -280,6 +606,9 @@ export function createCropController({
       pendingScreenSelections: pendingSelections,
       onScreenSelectionRemove: handleSelectionRemove,
       onScreenSelectionSelect: handleSelectionSelect,
+      keepSphere,
+      onKeepSphereRemove: removeKeepSphere,
+      onKeepSphereSelect: selectKeepSphere,
       tilesetHasGaussianSplats: hasGaussianSplats,
     });
   }
@@ -568,6 +897,206 @@ export function createCropController({
     );
   }
 
+  function formatKeepSphereRadius(radius) {
+    const value = Number(radius);
+    if (!Number.isFinite(value)) {
+      return '0';
+    }
+    const abs = Math.abs(value);
+    if (abs > 0 && (abs < 0.001 || abs >= 1000000)) {
+      return value.toExponential(3).replace(/\.?0+e/, 'e');
+    }
+    return (abs < 1 ? value.toFixed(3) : value.toFixed(2)).replace(
+      /\.?0+$/,
+      '',
+    );
+  }
+
+  function createKeepSphere() {
+    if (!hasGaussianSplats) {
+      setStatus('Crop sphere is available for 3D Gaussian Splat tilesets only.', true);
+      return;
+    }
+    if (keepSphere) {
+      setStatus('Only one crop sphere can be active.', true);
+      return;
+    }
+    if (!getTilesetBoundingSphere(sphere)) {
+      setStatus('Tileset bounds are not ready yet.', true);
+      return;
+    }
+
+    cancelMode();
+    cancelOtherPositionPickModes();
+    setTransformMode(null);
+
+    getCurrentRootMatrix(rootMatrix);
+    rootInverseMatrix.copy(rootMatrix).invert();
+    const rootScale = getCurrentRootScale();
+    const localRadius = Math.max(
+      KEEP_SPHERE_MIN_RADIUS,
+      sphere.radius / rootScale,
+    );
+    sphereLocalCenter.copy(sphere.center).applyMatrix4(rootInverseMatrix);
+    keepSphere = {
+      action: SCREEN_SELECTION_ACTION_INCLUDE,
+      confirmed: false,
+      id: nextSelectionId++,
+      localBaseRadius: localRadius,
+      localCenter: sphereLocalCenter.toArray(),
+      localRadius,
+      radiusExponent: 0,
+      type: 'sphere',
+      worldCenter: sphere.center.toArray(),
+      worldRadius: sphere.radius,
+    };
+    activeSelectionId = keepSphere.id;
+    updateKeepSphereWorldState();
+    syncEditSdfs();
+    syncFarHandles();
+    syncTransformControlsState();
+    refreshUi();
+    setStatus('Created crop sphere at the tileset center. Adjust radius or move it, then Confirm or Cancel.');
+  }
+
+  function confirmKeepSphere() {
+    if (!keepSphere || keepSphere.confirmed) {
+      return;
+    }
+    keepSphere.confirmed = true;
+    activeSelectionId = null;
+    syncEditSdfs();
+    syncFarHandles();
+    syncTransformControlsState();
+    refreshUi();
+    setStatus('Confirmed crop sphere. Splats outside the sphere are hidden and will be removed on Save. Select its row to adjust it again.');
+  }
+
+  function cancelKeepSphere() {
+    if (!keepSphere || keepSphere.confirmed) {
+      return;
+    }
+    if (activeSelectionId === keepSphere.id) {
+      activeSelectionId = null;
+    }
+    disposeKeepSphere(keepSphere);
+    keepSphere = null;
+    keepSphereTrackDrag = null;
+    syncEditSdfs();
+    syncFarHandles();
+    syncTransformControlsState();
+    refreshUi();
+    setStatus('Crop sphere cancelled.');
+  }
+
+  function removeKeepSphere() {
+    if (!keepSphere) {
+      return;
+    }
+    if (activeSelectionId === keepSphere.id) {
+      activeSelectionId = null;
+    }
+    disposeKeepSphere(keepSphere);
+    keepSphere = null;
+    keepSphereTrackDrag = null;
+    syncEditSdfs();
+    syncFarHandles();
+    syncTransformControlsState();
+    refreshUi();
+    setStatus('Removed crop sphere.');
+  }
+
+  function selectKeepSphere() {
+    if (!keepSphere) {
+      return;
+    }
+    activeSelectionId = activeSelectionId === keepSphere.id ? null : keepSphere.id;
+    setTransformMode(null);
+    syncEditSdfs();
+    syncFarHandles();
+    syncTransformControlsState();
+    refreshUi();
+    setStatus(
+      activeSelectionId === keepSphere?.id
+        ? 'Drag the crop sphere transform controls or adjust radius.'
+        : 'Crop sphere deactivated.',
+    );
+  }
+
+  function setKeepSphereRadiusExponent(exponent, { commit = false } = {}) {
+    if (!keepSphere) {
+      return false;
+    }
+    const nextExponent = Number(exponent);
+    if (!Number.isFinite(nextExponent)) {
+      return false;
+    }
+    keepSphere.radiusExponent = nextExponent;
+    keepSphere.localRadius = Math.max(
+      KEEP_SPHERE_MIN_RADIUS,
+      keepSphere.localBaseRadius * 2 ** nextExponent,
+    );
+    updateKeepSphereWorldState();
+    syncEditSdfs();
+    refreshUi();
+    if (commit) {
+      setStatus(`Crop sphere radius set to ${formatKeepSphereRadius(keepSphere.worldRadius)}.`);
+    }
+    return true;
+  }
+
+  function beginKeepSphereRadiusTrackDrag(clientX) {
+    if (!keepSphere) {
+      return false;
+    }
+    keepSphereTrackDrag = {
+      startClientX: clientX,
+      startExponent: keepSphere.radiusExponent,
+    };
+    viewerElements.keepSphereRadiusTrackEl?.style.setProperty(
+      '--scale-track-offset',
+      '0px',
+    );
+    return true;
+  }
+
+  function setKeepSphereRadiusFromTrackClientX(clientX) {
+    if (!keepSphere || !keepSphereTrackDrag) {
+      return false;
+    }
+    const deltaX = clientX - keepSphereTrackDrag.startClientX;
+    viewerElements.keepSphereRadiusTrackEl?.style.setProperty(
+      '--scale-track-offset',
+      `${deltaX}px`,
+    );
+    return setKeepSphereRadiusExponent(
+      keepSphereTrackDrag.startExponent +
+        deltaX / KEEP_SPHERE_RADIUS_TRACK_PIXELS_PER_EXPONENT,
+    );
+  }
+
+  function endKeepSphereRadiusTrackDrag({ commit = false } = {}) {
+    if (!keepSphereTrackDrag) {
+      return false;
+    }
+    keepSphereTrackDrag = null;
+    viewerElements.keepSphereRadiusTrackEl?.style.setProperty(
+      '--scale-track-offset',
+      '0px',
+    );
+    if (commit && keepSphere) {
+      setStatus(`Crop sphere radius set to ${formatKeepSphereRadius(keepSphere.worldRadius)}.`);
+    }
+    return true;
+  }
+
+  function nudgeKeepSphereRadiusExponent(delta) {
+    return setKeepSphereRadiusExponent(
+      (keepSphere?.radiusExponent || 0) + delta,
+      { commit: true },
+    );
+  }
+
   function toggle() {
     if (!hasGaussianSplats) {
       setStatus(
@@ -640,6 +1169,9 @@ export function createCropController({
 
   function findSelection(selectionId) {
     const id = Number(selectionId);
+    if (keepSphere?.id === id) {
+      return { confirmed: keepSphere.confirmed, selection: keepSphere };
+    }
     let selection = selections.find((entry) => entry.id === id);
     if (selection) {
       return { confirmed: true, selection };
@@ -670,6 +1202,20 @@ export function createCropController({
   }
 
   function handleTransformControlObjectChange(object) {
+    if (object?.userData?.keepSphereHandle) {
+      if (!keepSphere || object.userData.screenSelectionId !== keepSphere.id) {
+        return true;
+      }
+      getCurrentRootMatrix(rootMatrix);
+      rootInverseMatrix.copy(rootMatrix).invert();
+      sphereLocalCenter.copy(object.position).applyMatrix4(rootInverseMatrix);
+      keepSphere.localCenter = sphereLocalCenter.toArray();
+      updateKeepSphereWorldState();
+      syncEditSdfs();
+      refreshUi();
+      return true;
+    }
+
     if (!object?.userData?.screenSelectionFarHandle) {
       return false;
     }
@@ -751,15 +1297,22 @@ export function createCropController({
 
   function getPayload() {
     syncWorldState();
-    return selections.map(getScreenSelectionPayload);
+    const payload = selections.map(getScreenSelectionPayload);
+    if (keepSphere?.confirmed) {
+      payload.push(getScreenSelectionPayload(keepSphere));
+    }
+    return payload;
   }
 
   function clearAll() {
     cancelMode();
     selections.forEach(disposeScreenSelection);
     pendingSelections.forEach(disposeScreenSelection);
+    disposeKeepSphere(keepSphere);
     selections = [];
     pendingSelections = [];
+    keepSphere = null;
+    keepSphereTrackDrag = null;
     activeSelectionId = null;
     clearPendingScreenEdit();
     syncEditSdfs();
@@ -828,6 +1381,16 @@ export function createCropController({
     return handlePendingEditPointerCancel(event);
   }
 
+  function isRaycastHitVisible(intersection) {
+    if (!hasGaussianSplats || !isGaussianSplatObject(intersection?.object)) {
+      return true;
+    }
+    if (!intersection?.point) {
+      return true;
+    }
+    return isSplatPointVisibleForRaycast(intersection.point);
+  }
+
   cameraController.addEventListener(
     'update',
     freezePendingScreenEditIfCameraChanged,
@@ -853,8 +1416,17 @@ export function createCropController({
     handleSelectionRemove,
     handleSelectionSelect,
     handleTransformControlObjectChange,
-    hasPendingSelections: () => pendingSelections.length > 0,
+    isRaycastHitVisible,
+    hasPendingSelections: () =>
+      pendingSelections.length > 0 || (keepSphere && !keepSphere.confirmed),
+    beginKeepSphereRadiusTrackDrag,
+    cancelKeepSphere,
+    confirmKeepSphere,
+    createKeepSphere,
+    endKeepSphereRadiusTrackDrag,
+    nudgeKeepSphereRadiusExponent,
     notifyTransformModeChanged,
+    setKeepSphereRadiusFromTrackClientX,
     setHasGaussianSplats,
     shouldCapturePointerDown,
     syncWorldState,

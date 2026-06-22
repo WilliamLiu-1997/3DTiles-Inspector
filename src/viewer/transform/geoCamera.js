@@ -83,7 +83,7 @@ export function createGeoCameraController({
 
   function getLocalFrameQuaternion(referencePoint, target) {
     if (
-      referencePoint.lengthSq() < centerModeDistanceSq ||
+      referencePoint.lengthSq() <= centerModeDistanceSq ||
       !getActiveEllipsoid()
     ) {
       return target.identity();

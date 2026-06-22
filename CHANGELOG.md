@@ -6,6 +6,20 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-06-23
+
+### Added
+
+- Added a single crop-sphere selection for Gaussian splats, with radius
+  adjustment, transform controls, preview highlighting, confirmed outside
+  hiding, center-point local-coordinate sphere/transform axes, and save-time
+  removal of splats outside the sphere.
+
+### Changed
+
+- Changed camera picking on Gaussian splats to ignore areas hidden by confirmed
+  crop regions and crop sphere.
+
 ## [0.2.14] - 2026-06-19
 
 ### Changed

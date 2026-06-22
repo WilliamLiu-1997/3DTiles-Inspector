@@ -5,6 +5,7 @@ const {
 } = require('./spzSubsetWriter');
 
 const SPZ_POSITION_STRIDE = 9;
+const SCREEN_SELECTION_ACTION_INCLUDE = 'include';
 
 function multiplyMatrix4(left, right) {
   const out = new Float64Array(16);
@@ -81,8 +82,18 @@ function buildSourceToScreenSelections(screenSelections, descriptors) {
     for (let j = 0; j < descriptors.length; j++) {
       const descriptor = descriptors[j];
       const sourceToWorldMatrix = descriptor.sourceToWorldMatrix;
+      if (selection.sphere) {
+        sourceToScreenSelections.push({
+          action: selection.action,
+          radius: selection.sphere.radius,
+          sphereCenter: selection.sphere.center,
+          sourceToWorldMatrix,
+        });
+        continue;
+      }
       if (selection.planeMatrices) {
         sourceToScreenSelections.push({
+          action: selection.action,
           planes: buildSourceSpacePlaneValues(
             selection.planeMatrices,
             sourceToWorldMatrix,
@@ -91,6 +102,7 @@ function buildSourceToScreenSelections(screenSelections, descriptors) {
       } else {
         const rect = selection.rect;
         sourceToScreenSelections.push({
+          action: selection.action,
           matrix: multiplyMatrix4(
             selection.viewProjectionMatrix,
             sourceToWorldMatrix,
@@ -119,7 +131,25 @@ function buildSourceSpacePlaneValues(planeMatrices, sourceToWorldMatrix) {
   return values;
 }
 
+function transformPoint(matrix, x, y, z) {
+  const w = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
+  const inverseW = Number.isFinite(w) && w !== 0 ? 1 / w : 1;
+  return {
+    x: (matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12]) * inverseW,
+    y: (matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13]) * inverseW,
+    z: (matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14]) * inverseW,
+  };
+}
+
 function centerIsInsideScreenSelection(x, y, z, selection) {
+  if (selection.sphereCenter) {
+    const point = transformPoint(selection.sourceToWorldMatrix, x, y, z);
+    const dx = point.x - selection.sphereCenter[0];
+    const dy = point.y - selection.sphereCenter[1];
+    const dz = point.z - selection.sphereCenter[2];
+    return dx * dx + dy * dy + dz * dz <= selection.radius * selection.radius;
+  }
+
   if (selection.planes) {
     const planes = selection.planes;
     for (let i = 0; i < planes.length; i += 4) {
@@ -166,14 +196,12 @@ function centerIsSelectedForDeletion(
   sourceToScreenSelections,
 ) {
   for (let i = 0; i < sourceToScreenSelections.length; i++) {
-    if (
-      centerIsInsideScreenSelection(
-        x,
-        y,
-        z,
-        sourceToScreenSelections[i],
-      )
-    ) {
+    const selection = sourceToScreenSelections[i];
+    const inside = centerIsInsideScreenSelection(x, y, z, selection);
+    if (selection.action === SCREEN_SELECTION_ACTION_INCLUDE && !inside) {
+      return true;
+    }
+    if (selection.action !== SCREEN_SELECTION_ACTION_INCLUDE && inside) {
       return true;
     }
   }

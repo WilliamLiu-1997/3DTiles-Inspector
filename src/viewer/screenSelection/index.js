@@ -1,5 +1,6 @@
 import {
   SCREEN_SELECTION_ACTION_EXCLUDE,
+  SCREEN_SELECTION_ACTION_INCLUDE,
   SCREEN_SELECTION_MIN_DEPTH_RANGE,
   cameraPosition,
   copyDepthRange,
@@ -27,6 +28,7 @@ import {
 } from './farHandle.js';
 
 export { SCREEN_SELECTION_ACTION_EXCLUDE } from './state.js';
+export { SCREEN_SELECTION_ACTION_INCLUDE } from './state.js';
 export {
   createScreenSelectionEdit,
   setScreenSelectionEditSelection,
@@ -38,6 +40,7 @@ export {
 export { createScreenSelectionPointerTracker } from './pointerTracker.js';
 
 export function createScreenSelection({
+  action = SCREEN_SELECTION_ACTION_EXCLUDE,
   cameraPosition: sourceCameraPosition,
   depthRange,
   farPlane,
@@ -51,7 +54,7 @@ export function createScreenSelection({
   const copiedPlaneMatrices = planeMatrices.map((matrix) => matrix.slice());
   const referenceTransformMatrix = copyMatrix4Array(transformMatrix);
   return {
-    action: SCREEN_SELECTION_ACTION_EXCLUDE,
+    action,
     basePlaneMatrices: copiedPlaneMatrices.map((matrix) => matrix.slice()),
     cameraPosition: copyVectorArray(sourceCameraPosition),
     currentTransformMatrix: referenceTransformMatrix.slice(),
@@ -80,8 +83,18 @@ export function disposeScreenSelection(selection) {
 }
 
 export function getScreenSelectionPayload(selection) {
+  if (selection?.type === 'sphere') {
+    return {
+      action: SCREEN_SELECTION_ACTION_INCLUDE,
+      sphere: {
+        center: selection.worldCenter.slice(),
+        radius: selection.worldRadius,
+      },
+    };
+  }
+
   return {
-    action: SCREEN_SELECTION_ACTION_EXCLUDE,
+    action: selection.action || SCREEN_SELECTION_ACTION_EXCLUDE,
     planeMatrices: selection.planeMatrices.map((matrix) => matrix.slice()),
     rect: copyRect(selection.rect),
     viewProjectionMatrix: selection.viewProjectionMatrix.slice(),

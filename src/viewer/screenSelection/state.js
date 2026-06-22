@@ -1,6 +1,7 @@
 import { Color, Matrix4, Plane, Vector2, Vector3 } from 'three';
 
 export const SCREEN_SELECTION_ACTION_EXCLUDE = 'exclude';
+export const SCREEN_SELECTION_ACTION_INCLUDE = 'include';
 
 export const SCREEN_SELECTION_EXCLUDE_COLOR = new Color(1, 0.82, 0);
 export const SCREEN_SELECTION_HIDDEN_COLOR = new Color(1, 1, 1);

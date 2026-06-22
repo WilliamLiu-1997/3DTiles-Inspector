@@ -331,8 +331,13 @@ cropController = createCropController({
   cancelOtherPositionPickModes: () => setPositionController.cancelMode(),
   getCurrentRootTransformArray: () =>
     rootTransform.getCurrentRootTransformArray(),
+  getLocalFrameQuaternion: (referencePoint, target) =>
+    geoCamera.getLocalFrameQuaternion(referencePoint, target),
   getTilesetBoundingSphere,
 });
+cameraController.setRaycastHitFilter((intersection) =>
+  cropController?.isRaycastHitVisible(intersection) ?? true,
+);
 
 transformModeController = createTransformModeController({
   cropController,
@@ -516,7 +521,7 @@ async function saveTransform() {
   cancelPositionPickModes();
   if (cropController.hasPendingSelections()) {
     setStatus(
-      'Confirm or cancel pending screen selections before saving.',
+      'Confirm or cancel pending crop selections before saving.',
       true,
     );
     return;
@@ -601,8 +606,15 @@ bindViewerEvents({
   getTiles: () => tiles,
   handlers: {
     cancelCropScreenSelection: cropController.cancel,
+    beginKeepSphereRadiusTrackDrag:
+      cropController.beginKeepSphereRadiusTrackDrag,
+    cancelKeepSphere: cropController.cancelKeepSphere,
     cancelPositionPickModes,
     confirmCropScreenSelection: cropController.confirm,
+    confirmKeepSphere: cropController.confirmKeepSphere,
+    createKeepSphere: cropController.createKeepSphere,
+    endKeepSphereRadiusTrackDrag:
+      cropController.endKeepSphereRadiusTrackDrag,
     handleScreenSelectionPointerCancel: cropController.handlePointerCancel,
     handleScreenSelectionPointerDown: cropController.handlePointerDown,
     handleScreenSelectionPointerMove: cropController.handlePointerMove,
@@ -617,6 +629,9 @@ bindViewerEvents({
     requestViewerShutdown,
     resetToSaved,
     saveTransform,
+    nudgeKeepSphereRadiusExponent: cropController.nudgeKeepSphereRadiusExponent,
+    setKeepSphereRadiusFromTrackClientX:
+      cropController.setKeepSphereRadiusFromTrackClientX,
     setTerrainEnabled: viewerToggles.setTerrainEnabled,
     toggleBoundingVolume: viewerToggles.toggleBoundingVolume,
     toggleCropScreenSelectionMode: cropController.toggle,

@@ -19,6 +19,10 @@ export function bindViewerEvents({
     cropScreenCancelButton,
     cropScreenConfirmButton,
     cropScreenSelectButton,
+    keepSphereCancelButton,
+    keepSphereConfirmButton,
+    keepSphereCreateButton,
+    keepSphereRadiusTrackEl,
     geometricErrorLayerScaleInput,
     geometricErrorScaleInput,
     moveCameraToCoordinateButton,
@@ -36,6 +40,7 @@ export function bindViewerEvents({
   } = elements;
 
   let uniformScaleTrackPointerId = null;
+  let keepSphereRadiusTrackPointerId = null;
 
   function setUniformScaleStatus() {
     setStatus(
@@ -151,6 +156,64 @@ export function bindViewerEvents({
     'click',
     handlers.cancelCropScreenSelection,
   );
+  keepSphereCreateButton.addEventListener('click', handlers.createKeepSphere);
+  keepSphereConfirmButton.addEventListener('click', handlers.confirmKeepSphere);
+  keepSphereCancelButton.addEventListener('click', handlers.cancelKeepSphere);
+  keepSphereRadiusTrackEl.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || keepSphereRadiusTrackEl.classList.contains('disabled')) {
+      return;
+    }
+
+    event.preventDefault();
+    keepSphereRadiusTrackPointerId = event.pointerId;
+    keepSphereRadiusTrackEl.focus();
+    keepSphereRadiusTrackEl.classList.add('dragging');
+    keepSphereRadiusTrackEl.setPointerCapture(event.pointerId);
+    handlers.beginKeepSphereRadiusTrackDrag(event.clientX);
+  });
+  keepSphereRadiusTrackEl.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== keepSphereRadiusTrackPointerId) {
+      return;
+    }
+
+    handlers.setKeepSphereRadiusFromTrackClientX(event.clientX);
+  });
+  keepSphereRadiusTrackEl.addEventListener('pointerup', (event) => {
+    if (event.pointerId !== keepSphereRadiusTrackPointerId) {
+      return;
+    }
+
+    keepSphereRadiusTrackPointerId = null;
+    keepSphereRadiusTrackEl.classList.remove('dragging');
+    keepSphereRadiusTrackEl.releasePointerCapture(event.pointerId);
+    handlers.endKeepSphereRadiusTrackDrag({ commit: true });
+  });
+  keepSphereRadiusTrackEl.addEventListener('pointercancel', (event) => {
+    if (event.pointerId !== keepSphereRadiusTrackPointerId) {
+      return;
+    }
+
+    keepSphereRadiusTrackPointerId = null;
+    keepSphereRadiusTrackEl.classList.remove('dragging');
+    keepSphereRadiusTrackEl.releasePointerCapture(event.pointerId);
+    handlers.endKeepSphereRadiusTrackDrag();
+  });
+  keepSphereRadiusTrackEl.addEventListener('keydown', (event) => {
+    let handled = true;
+    const step = event.shiftKey ? 1 : 0.1;
+
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
+      handlers.nudgeKeepSphereRadiusExponent(-step);
+    } else if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
+      handlers.nudgeKeepSphereRadiusExponent(step);
+    } else {
+      handled = false;
+    }
+
+    if (handled) {
+      event.preventDefault();
+    }
+  });
   toolbarToggleButton.addEventListener(
     'click',
     handlers.toggleToolbarVisibility,

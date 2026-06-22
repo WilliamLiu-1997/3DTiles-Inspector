@@ -36,6 +36,46 @@ export function createScreenSelectionSdfs(planeMatrices) {
   return planeMatrices.map((matrix) => createScreenSelectionSdf(matrix));
 }
 
+export function createSphereSelectionSdf(selection) {
+  const sdf = new SplatEditSdf({
+    type: SplatEditSdfType.SPHERE,
+    invert: false,
+    color: SCREEN_SELECTION_EXCLUDE_COLOR.clone(),
+    opacity: 1,
+    radius: Number(selection?.worldRadius) || 0,
+  });
+  if (Array.isArray(selection?.worldCenter)) {
+    sdf.position.fromArray(selection.worldCenter);
+  }
+  sdf.updateMatrix();
+  sdf.updateMatrixWorld(true);
+  return sdf;
+}
+
+export function applySphereSelectionSdf(selection) {
+  if (!selection) {
+    return;
+  }
+  if (!Array.isArray(selection.sdfs) || selection.sdfs.length !== 1) {
+    selection.sdfs?.forEach((sdf) => {
+      sdf.removeFromParent();
+    });
+    selection.sdfs = [createSphereSelectionSdf(selection)];
+    return;
+  }
+
+  const sdf = selection.sdfs[0];
+  sdf.type = SplatEditSdfType.SPHERE;
+  sdf.invert = false;
+  sdf.radius = Number(selection.worldRadius) || 0;
+  if (Array.isArray(selection.worldCenter)) {
+    sdf.position.fromArray(selection.worldCenter);
+  }
+  sdf.scale.setScalar(1);
+  sdf.updateMatrix();
+  sdf.updateMatrixWorld(true);
+}
+
 export function applyScreenSelectionSdfMatrices(selection) {
   if (
     !selection.sdfs ||
@@ -54,10 +94,11 @@ export function applyScreenSelectionSdfMatrices(selection) {
 }
 
 export function setScreenSelectionEditSelection(edit, selection, style) {
-  const hidden = style === true || style === 'exclude';
+  const hidden = style === true || style === 'exclude' || style === 'include';
+  const sphere = selection?.type === 'sphere';
   edit.sdfs = null;
   edit.clear();
-  edit.invert = !!selection;
+  edit.invert = sphere ? hidden : !!selection;
   edit.rgbaBlendMode = hidden
     ? SplatEditRgbaBlendMode.MULTIPLY
     : SplatEditRgbaBlendMode.SET_RGB;
@@ -66,10 +107,14 @@ export function setScreenSelectionEditSelection(edit, selection, style) {
   }
 
   edit.name = hidden
-    ? `Screen Selection ${selection.id} Exclude`
-    : `Screen Selection ${selection.id} Preview`;
+    ? sphere
+      ? `Crop Sphere ${selection.id} Include`
+      : `Screen Selection ${selection.id} Exclude`
+    : sphere
+      ? `Crop Sphere ${selection.id} Preview`
+      : `Screen Selection ${selection.id} Preview`;
   selection.sdfs.forEach((sdf) => {
-    sdf.invert = true;
+    sdf.invert = sphere ? false : true;
     if (hidden) {
       sdf.color.copy(SCREEN_SELECTION_HIDDEN_COLOR);
       sdf.opacity = SCREEN_SELECTION_HIDDEN_ALPHA;
@@ -82,7 +127,7 @@ export function setScreenSelectionEditSelection(edit, selection, style) {
 }
 
 export function createScreenSelectionEdit({ style, hidden, name }) {
-  const isHidden = style === 'exclude' || hidden === true;
+  const isHidden = style === 'exclude' || style === 'include' || hidden === true;
   return new SplatEdit({
     name,
     rgbaBlendMode: isHidden

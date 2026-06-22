@@ -2,6 +2,7 @@ const { InspectorError } = require('../../errors');
 
 const MAX_SCREEN_SELECTIONS = 256;
 const SCREEN_SELECTION_ACTION_EXCLUDE = 'exclude';
+const SCREEN_SELECTION_ACTION_INCLUDE = 'include';
 
 function normalizeMatrix4Array(value, name = 'matrix') {
   if (!Array.isArray(value) || value.length !== 16) {
@@ -56,10 +57,33 @@ function normalizeScreenSelectionAction(value, name) {
   if (value == null) {
     return SCREEN_SELECTION_ACTION_EXCLUDE;
   }
-  if (value !== SCREEN_SELECTION_ACTION_EXCLUDE) {
-    throw new InspectorError(`${name} must be "exclude".`);
+  if (
+    value !== SCREEN_SELECTION_ACTION_EXCLUDE &&
+    value !== SCREEN_SELECTION_ACTION_INCLUDE
+  ) {
+    throw new InspectorError(`${name} must be "exclude" or "include".`);
   }
   return value;
+}
+
+function normalizeSphereSelection(value, name) {
+  if (value == null) {
+    return null;
+  }
+  if (!value || typeof value !== 'object') {
+    throw new InspectorError(`${name} must be an object.`);
+  }
+  if (!Array.isArray(value.center) || value.center.length !== 3) {
+    throw new InspectorError(`${name}.center must be a 3-number array.`);
+  }
+  const center = value.center.map((entry, index) =>
+    normalizeFiniteNumber(entry, `${name}.center[${index}]`),
+  );
+  const radius = normalizeFiniteNumber(value.radius, `${name}.radius`);
+  if (radius <= 0) {
+    throw new InspectorError(`${name}.radius must be greater than 0.`);
+  }
+  return { center, radius };
 }
 
 function normalizeScreenSelectionPlaneMatrices(value, name) {
@@ -96,11 +120,23 @@ function normalizeSplatScreenSelections(value) {
       );
     }
 
+    const action = normalizeScreenSelectionAction(
+      entry.action,
+      `splatScreenSelections[${index}].action`,
+    );
+    const sphere = normalizeSphereSelection(
+      entry.sphere,
+      `splatScreenSelections[${index}].sphere`,
+    );
+    if (sphere) {
+      return {
+        action,
+        sphere,
+      };
+    }
+
     return {
-      action: normalizeScreenSelectionAction(
-        entry.action,
-        `splatScreenSelections[${index}].action`,
-      ),
+      action,
       rect: normalizeScreenSelectionRect(
         entry.rect,
         `splatScreenSelections[${index}].rect`,
@@ -119,6 +155,7 @@ function normalizeSplatScreenSelections(value) {
 
 module.exports = {
   SCREEN_SELECTION_ACTION_EXCLUDE,
+  SCREEN_SELECTION_ACTION_INCLUDE,
   normalizeMatrix4Array,
   normalizeSplatScreenSelections,
 };

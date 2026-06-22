@@ -24,10 +24,19 @@ export function createTransformModeController({
     const pendingPositionPick =
       setPositionController.isPending() || cropController.getPendingMode();
     const activeCropScreenSelection = cropController.getActiveSelection();
+    const activeKeepSphere =
+      activeCropScreenSelection?.type === 'sphere'
+        ? activeCropScreenSelection
+        : null;
     const farControlsVisible =
       !!activeCropScreenSelection?.farHandle && !pendingPositionPick;
+    const sphereControlsVisible =
+      !!activeKeepSphere?.wireframe && !pendingPositionPick;
     const rootControlsVisible =
-      activeMode !== null && !farControlsVisible && !pendingPositionPick;
+      activeMode !== null &&
+      !farControlsVisible &&
+      !sphereControlsVisible &&
+      !pendingPositionPick;
 
     if (farControlsVisible) {
       if (transformControls.object !== activeCropScreenSelection.farHandle) {
@@ -36,6 +45,13 @@ export function createTransformModeController({
       transformControls.setMode('translate');
       transformControls.setSpace('local');
       setAxes(false, false, true);
+    } else if (sphereControlsVisible) {
+      if (transformControls.object !== activeKeepSphere.wireframe) {
+        transformControls.attach(activeKeepSphere.wireframe);
+      }
+      transformControls.setMode('translate');
+      transformControls.setSpace('local');
+      setAxes(true, true, true);
     } else if (rootControlsVisible) {
       if (transformControls.object !== transformHandle) {
         transformControls.attach(transformHandle);
@@ -47,7 +63,8 @@ export function createTransformModeController({
       transformControls.detach();
     }
 
-    const controlsVisible = farControlsVisible || rootControlsVisible;
+    const controlsVisible =
+      farControlsVisible || sphereControlsVisible || rootControlsVisible;
     transformControls.enabled = controlsVisible;
     if (transformControlsHelper) {
       transformControlsHelper.visible = controlsVisible;

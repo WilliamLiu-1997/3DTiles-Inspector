@@ -92,14 +92,14 @@ const {
 - `Terrain`, off by default, to toggle Cesium World Terrain after entering a Cesium ion token, while keeping satellite imagery
 - `Geometric Error` scaling from `1/16x` to `16x`
 - `Layer Multiplier` scaling from `1/8x` to `8x` for each tile's geometric-error difference from the tileset's global leaf baseline
-- `Crop Regions` for drawing screen-space exclude regions on 3D Gaussian Splat tilesets
-- `Save` to persist root transform edits, geometric-error scaling, and confirmed crop regions back to disk
+- `Crop Regions` for drawing screen-space exclude regions or a crop sphere on 3D Gaussian Splat tilesets
+- `Save` to persist root transform edits, geometric-error scaling, and confirmed crop selections back to disk
 
 ### Crop Regions
 
-`Crop Regions` appears when the loaded tileset contains 3D Gaussian Splat content. It lets you draw one or more screen-space exclude rectangles, preview them in the viewer, then apply the crop when you click `Save`.
+`Crop Regions` appears when the loaded tileset contains 3D Gaussian Splat content. It lets you draw one or more screen-space exclude rectangles or define a single crop sphere, preview them in the viewer, then apply the crop when you click `Save`.
 
-The basic workflow is:
+For screen regions:
 
 1. Click `Draw Region` and drag a rectangle over the splats to remove.
 2. Before moving the camera, drag pending corner points or side handles if the screen region needs adjustment; the pending shape must stay a convex four-sided screen quadrilateral.
@@ -107,6 +107,13 @@ The basic workflow is:
 4. Click `Confirm` to add the region to the save list, or `Cancel` to discard the pending rectangle.
 5. Select a confirmed region row if you need to adjust its 3D far plane with the transform handle.
 6. Click `Save` to persist the root transform and delete splats inside the confirmed crop regions.
+
+For the crop sphere:
+
+1. Click `Create Sphere` to place one sphere at the current tileset center.
+2. Adjust its radius with the radius track, or select its row and move it with the sphere-center local-coordinate transform handle.
+3. Click `Confirm` to hide splats outside the sphere, or `Cancel` to discard it.
+4. Click `Save` to remove splats outside the confirmed sphere.
 
 <img src="https://raw.githubusercontent.com/WilliamLiu-1997/3DTiles-Inspector/main/region.png" alt="Crop Regions" />
 

@@ -1,6 +1,9 @@
 export function updateCropControls({
   activeScreenSelectionId,
   elements,
+  keepSphere,
+  onKeepSphereRemove,
+  onKeepSphereSelect,
   onScreenSelectionRemove,
   onScreenSelectionSelect,
   pendingScreenSelectionMode,
@@ -14,8 +17,16 @@ export function updateCropControls({
     cropScreenCancelButton,
     cropScreenConfirmButton,
     cropScreenSelectButton,
+    keepSphereCancelButton,
+    keepSphereConfirmButton,
+    keepSphereCreateButton,
+    keepSphereListEl,
+    keepSphereRadiusTrackEl,
+    keepSphereRadiusValueEl,
   } = elements;
   const hasPendingScreenSelection = pendingScreenSelections.length > 0;
+  const hasKeepSphere = !!keepSphere;
+  const hasPendingKeepSphere = hasKeepSphere && !keepSphere.confirmed;
 
   cropScreenSelectButton.disabled =
     !tilesetHasGaussianSplats || hasPendingScreenSelection;
@@ -28,6 +39,33 @@ export function updateCropControls({
   cropCountValueEl.textContent = String(
     screenSelections.length + pendingScreenSelections.length,
   );
+  keepSphereCreateButton.disabled =
+    !tilesetHasGaussianSplats || hasKeepSphere;
+  keepSphereConfirmButton.disabled =
+    !tilesetHasGaussianSplats || !hasPendingKeepSphere;
+  keepSphereCancelButton.disabled =
+    !tilesetHasGaussianSplats || !hasPendingKeepSphere;
+  keepSphereRadiusTrackEl.classList.toggle('disabled', !hasKeepSphere);
+  keepSphereRadiusTrackEl.setAttribute(
+    'aria-disabled',
+    hasKeepSphere ? 'false' : 'true',
+  );
+  keepSphereRadiusValueEl.textContent = hasKeepSphere
+    ? formatRadius(keepSphere.worldRadius)
+    : 'None';
+
+  keepSphereListEl.replaceChildren();
+  if (hasKeepSphere) {
+    keepSphereListEl.appendChild(
+      createSelectionControl({
+        active: keepSphere.id === activeScreenSelectionId,
+        label: keepSphere.confirmed ? 'Crop Sphere' : 'Pending',
+        onScreenSelectionRemove: onKeepSphereRemove,
+        onScreenSelectionSelect: onKeepSphereSelect,
+        selection: keepSphere,
+      }),
+    );
+  }
 
   cropListEl.replaceChildren();
   pendingScreenSelections.forEach((selection) => {
@@ -55,6 +93,18 @@ export function updateCropControls({
         }),
       );
     });
+}
+
+function formatRadius(radius) {
+  const value = Number(radius);
+  if (!Number.isFinite(value)) {
+    return 'None';
+  }
+  const abs = Math.abs(value);
+  if (abs > 0 && (abs < 0.001 || abs >= 1000000)) {
+    return value.toExponential(3).replace(/\.?0+e/, 'e');
+  }
+  return (abs < 1 ? value.toFixed(3) : value.toFixed(2)).replace(/\.?0+$/, '');
 }
 
 function createSelectionControl({

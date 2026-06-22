@@ -75,8 +75,16 @@ async function deleteSplatsInNormalizedSelections(
     planeMatrices: selection.planeMatrices
       ? selection.planeMatrices.map((matrix) => matrix.slice())
       : null,
-    rect: { ...selection.rect },
-    viewProjectionMatrix: selection.viewProjectionMatrix.slice(),
+    rect: selection.rect ? { ...selection.rect } : null,
+    sphere: selection.sphere
+      ? {
+          center: selection.sphere.center.slice(),
+          radius: selection.sphere.radius,
+        }
+      : null,
+    viewProjectionMatrix: selection.viewProjectionMatrix
+      ? selection.viewProjectionMatrix.slice()
+      : null,
   }));
   const workerPool = new SplatCropWorkerPool(SPLAT_CROP_WORKER_COUNT);
 

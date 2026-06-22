@@ -466,6 +466,59 @@ async function assertCropSaveDeletesTwoSplats({ tilesetPath, readSpzBytes }) {
   assert.ok(Math.abs(centers[0].x - 3) < 0.01);
 }
 
+async function assertKeepSphereSaveDeletesOutsideSplats(baseDir) {
+  const keepSphereDir = path.join(baseDir, 'keep-sphere');
+  fs.mkdirSync(keepSphereDir);
+
+  const spzBytes = await createSpzBytes([
+    [0, 0, 0],
+    [0.5, 0, 0],
+    [3, 0, 0],
+  ]);
+  const tilesetPath = path.join(keepSphereDir, 'tileset.json');
+  const gltfPath = path.join(keepSphereDir, 'splats.gltf');
+  const binPath = path.join(keepSphereDir, 'splats.bin');
+  fs.writeFileSync(binPath, spzBytes);
+  fs.writeFileSync(
+    gltfPath,
+    JSON.stringify(makeGaussianGltf('splats.bin', spzBytes.length)),
+    'utf8',
+  );
+  writeSplatTileset(tilesetPath, 'splats.gltf');
+
+  const session = await api.startInspectorSession(tilesetPath, {
+    handleSignals: false,
+    openBrowser: false,
+  });
+  try {
+    const payload = await postSave(session.url, {
+      geometricErrorLayerScale: 1,
+      geometricErrorScale: 1,
+      splatScreenSelections: [
+        {
+          action: 'include',
+          sphere: {
+            center: [0, 0, 0],
+            radius: 1,
+          },
+        },
+      ],
+      transform: IDENTITY_MATRIX4,
+    });
+    assert.strictEqual(payload.deletedSplats, 1);
+    assert.strictEqual(payload.processedSplatResources, 1);
+  } finally {
+    await session.close();
+  }
+
+  const centers = await readSpzCenters(
+    readGltfBufferViewBytes(gltfPath, binPath),
+  );
+  assert.strictEqual(centers.length, 2);
+  assert.ok(Math.abs(centers[0].x - 0) < 0.01);
+  assert.ok(Math.abs(centers[1].x - 0.5) < 0.01);
+}
+
 async function assertCropSaveRawCopiesSurvivingSpzBytes(baseDir) {
   const rawCopyDir = path.join(baseDir, 'crop-raw-copy');
   fs.mkdirSync(rawCopyDir);
@@ -1390,6 +1443,7 @@ async function main() {
       readSpzBytes: () => readGlbBufferViewBytes(glbPath),
     });
 
+    await assertKeepSphereSaveDeletesOutsideSplats(tempDir);
     await assertCropSaveRewritesMultipleBufferViews(tempDir);
     await assertCropSaveRewritesNestedTileset(tempDir);
     await assertCropSavePrunesFullyDeletedSplatTile(tempDir);
