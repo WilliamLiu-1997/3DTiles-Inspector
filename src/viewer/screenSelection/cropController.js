@@ -6,7 +6,9 @@ import {
   LineSegments,
   Matrix4,
   Quaternion,
+  Raycaster,
   Sphere,
+  Vector2,
   Vector3,
 } from 'three';
 import {
@@ -45,10 +47,14 @@ import {
   pointSegmentDistanceSq,
 } from './editOverlay.js';
 import { updateCropControls } from '../dom/cropUi.js';
+import { mouseToCoords, setRaycasterFromCamera } from '../utils.js';
 
 const CAMERA_POSITION_EPSILON_SQ = 1e-12;
 const CAMERA_QUATERNION_EPSILON = 1e-10;
 const CAMERA_PROJECTION_EPSILON = 1e-10;
+const KEEP_SPHERE_CENTER_PICK_MAX_DISTANCE_PX = 2;
+const KEEP_SPHERE_CENTER_PICK_MAX_DISTANCE_SQ =
+  KEEP_SPHERE_CENTER_PICK_MAX_DISTANCE_PX ** 2;
 const KEEP_SPHERE_RADIUS_TRACK_PIXELS_PER_EXPONENT = 90;
 const KEEP_SPHERE_MIN_RADIUS = 1e-6;
 const KEEP_SPHERE_WIREFRAME_COLOR = 0xffffff;
@@ -183,6 +189,7 @@ export function createCropController({
   getCurrentRootTransformArray,
   getLocalFrameQuaternion,
   getTilesetBoundingSphere,
+  getTiles,
 }) {
   let selections = [];
   let pendingSelections = [];
@@ -192,6 +199,7 @@ export function createCropController({
   let pendingScreenEdit = null;
   let pendingEditDrag = null;
   let keepSphere = null;
+  let keepSphereCenterPick = null;
   let keepSphereTrackDrag = null;
   let editCursor = '';
   let hasGaussianSplats = false;
@@ -201,6 +209,9 @@ export function createCropController({
   const sphereWorldCenter = new Vector3();
   const sphereLocalCenter = new Vector3();
   const sphereWorldQuaternion = new Quaternion();
+  const keepSpherePickRaycaster = new Raycaster();
+  const keepSpherePointerCoords = new Vector2();
+  const keepSpherePickPoint = new Vector3();
   const raycastPlaneMatrix = new Matrix4();
   const raycastPlanePosition = new Vector3();
   const raycastPlaneQuaternion = new Quaternion();
@@ -209,6 +220,7 @@ export function createCropController({
   const raycastSphereCenter = new Vector3();
   const cameraForward = new Vector3();
   const screenEditOverlay = createScreenEditOverlay({ overlayEl, rectEl });
+  keepSpherePickRaycaster.params.Points.threshold = 0.1;
 
   function getActiveSelection() {
     if (activeSelectionId == null) {
@@ -313,6 +325,76 @@ export function createCropController({
     );
     applySphereSelectionSdf(selection);
     updateKeepSphereWireframe(selection);
+  }
+
+  function setKeepSphereWorldCenter(worldCenter, { commit = false } = {}) {
+    if (!keepSphere || !worldCenter) {
+      return false;
+    }
+
+    getCurrentRootMatrix(rootMatrix);
+    rootInverseMatrix.copy(rootMatrix).invert();
+    sphereLocalCenter.copy(worldCenter).applyMatrix4(rootInverseMatrix);
+    keepSphere.localCenter = sphereLocalCenter.toArray();
+    updateKeepSphereWorldState();
+    syncEditSdfs();
+    syncTransformControlsState();
+    refreshUi();
+
+    if (commit) {
+      setStatus(
+        keepSphere.confirmed
+          ? 'Moved crop sphere to the clicked tiles point. Click Save to persist, or select its row to deactivate.'
+          : 'Moved pending crop sphere to the clicked tiles point. Adjust radius, then Confirm or Cancel.',
+      );
+    }
+
+    return true;
+  }
+
+  function isKeepSphereActive() {
+    return !!keepSphere && activeSelectionId === keepSphere.id;
+  }
+
+  function shouldTrackKeepSphereCenterPick(event) {
+    if (!isKeepSphereActive()) {
+      return false;
+    }
+    if (event.pointerType === 'mouse' && event.button !== 0) {
+      return false;
+    }
+    return event.isPrimary !== false;
+  }
+
+  function raycastKeepSphereCenterPick(event, target) {
+    const tilesGroup = getTiles?.()?.group;
+    if (!tilesGroup) {
+      return false;
+    }
+
+    mouseToCoords(
+      event.clientX,
+      event.clientY,
+      domElement,
+      keepSpherePointerCoords,
+    );
+    setRaycasterFromCamera(
+      keepSpherePickRaycaster,
+      keepSpherePointerCoords,
+      camera,
+    );
+    tilesGroup.updateMatrixWorld(true);
+
+    const hits = keepSpherePickRaycaster.intersectObject(tilesGroup, true);
+    for (const hit of hits) {
+      if (!hit.point || !isRaycastHitVisible(hit)) {
+        continue;
+      }
+      target.copy(hit.point);
+      return true;
+    }
+
+    return false;
   }
 
   function createKeepSphereWireframe(selection) {
@@ -839,6 +921,91 @@ export function createCropController({
     return true;
   }
 
+  function handleKeepSphereCenterPickPointerDown(event) {
+    if (!shouldTrackKeepSphereCenterPick(event)) {
+      return false;
+    }
+
+    if (transformControls.enabled && transformControls.axis !== null) {
+      return false;
+    }
+
+    if (!raycastKeepSphereCenterPick(event, keepSpherePickPoint)) {
+      return false;
+    }
+
+    keepSphereCenterPick = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      moved: false,
+      pointerId: event.pointerId,
+      selectionId: keepSphere.id,
+    };
+    domElement.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+    return true;
+  }
+
+  function handleKeepSphereCenterPickPointerMove(event) {
+    if (
+      !keepSphereCenterPick ||
+      event.pointerId !== keepSphereCenterPick.pointerId
+    ) {
+      return false;
+    }
+
+    const dx = event.clientX - keepSphereCenterPick.clientX;
+    const dy = event.clientY - keepSphereCenterPick.clientY;
+    if (dx * dx + dy * dy > KEEP_SPHERE_CENTER_PICK_MAX_DISTANCE_SQ) {
+      keepSphereCenterPick.moved = true;
+    }
+    event.preventDefault();
+    return true;
+  }
+
+  function handleKeepSphereCenterPickPointerUp(event) {
+    if (
+      !keepSphereCenterPick ||
+      event.pointerId !== keepSphereCenterPick.pointerId
+    ) {
+      return false;
+    }
+
+    domElement.releasePointerCapture?.(event.pointerId);
+    const pick = keepSphereCenterPick;
+    keepSphereCenterPick = null;
+    const shouldApply =
+      !pick.moved &&
+      keepSphere?.id === pick.selectionId &&
+      activeSelectionId === pick.selectionId;
+    if (shouldApply) {
+      if (raycastKeepSphereCenterPick(event, keepSpherePickPoint)) {
+        setKeepSphereWorldCenter(keepSpherePickPoint, { commit: true });
+      } else {
+        setStatus(
+          'No tiles hit under cursor. Click the tiles to move the crop sphere.',
+          true,
+        );
+      }
+    }
+    event.preventDefault();
+    return true;
+  }
+
+  function handleKeepSphereCenterPickPointerCancel(event) {
+    if (
+      !keepSphereCenterPick ||
+      event.pointerId !== keepSphereCenterPick.pointerId
+    ) {
+      return false;
+    }
+
+    keepSphereCenterPick = null;
+    domElement.releasePointerCapture?.(event.pointerId);
+    event.preventDefault();
+    return true;
+  }
+
   function setMode(active) {
     pendingMode =
       active && hasGaussianSplats && pendingSelections.length === 0;
@@ -965,6 +1132,7 @@ export function createCropController({
     }
     keepSphere.confirmed = true;
     activeSelectionId = null;
+    keepSphereCenterPick = null;
     syncEditSdfs();
     syncFarHandles();
     syncTransformControlsState();
@@ -981,6 +1149,7 @@ export function createCropController({
     }
     disposeKeepSphere(keepSphere);
     keepSphere = null;
+    keepSphereCenterPick = null;
     keepSphereTrackDrag = null;
     syncEditSdfs();
     syncFarHandles();
@@ -998,6 +1167,7 @@ export function createCropController({
     }
     disposeKeepSphere(keepSphere);
     keepSphere = null;
+    keepSphereCenterPick = null;
     keepSphereTrackDrag = null;
     syncEditSdfs();
     syncFarHandles();
@@ -1011,6 +1181,9 @@ export function createCropController({
       return;
     }
     activeSelectionId = activeSelectionId === keepSphere.id ? null : keepSphere.id;
+    if (activeSelectionId !== keepSphere.id) {
+      keepSphereCenterPick = null;
+    }
     setTransformMode(null);
     syncEditSdfs();
     syncFarHandles();
@@ -1312,6 +1485,7 @@ export function createCropController({
     selections = [];
     pendingSelections = [];
     keepSphere = null;
+    keepSphereCenterPick = null;
     keepSphereTrackDrag = null;
     activeSelectionId = null;
     clearPendingScreenEdit();
@@ -1328,6 +1502,7 @@ export function createCropController({
 
   function deactivate() {
     activeSelectionId = null;
+    keepSphereCenterPick = null;
     syncEditSdfs();
     syncFarHandles();
     syncPendingEditOverlay();
@@ -1357,10 +1532,16 @@ export function createCropController({
     if (pointerTracker.handlePointerDown(event)) {
       return true;
     }
-    return handlePendingEditPointerDown(event);
+    if (handlePendingEditPointerDown(event)) {
+      return true;
+    }
+    return handleKeepSphereCenterPickPointerDown(event);
   }
 
   function handlePointerMove(event) {
+    if (handleKeepSphereCenterPickPointerMove(event)) {
+      return true;
+    }
     if (pointerTracker.handlePointerMove(event)) {
       return true;
     }
@@ -1368,6 +1549,9 @@ export function createCropController({
   }
 
   function handlePointerUp(event) {
+    if (handleKeepSphereCenterPickPointerUp(event)) {
+      return true;
+    }
     if (pointerTracker.handlePointerUp(event)) {
       return true;
     }
@@ -1375,6 +1559,9 @@ export function createCropController({
   }
 
   function handlePointerCancel(event) {
+    if (handleKeepSphereCenterPickPointerCancel(event)) {
+      return true;
+    }
     if (pointerTracker.handlePointerCancel(event)) {
       return true;
     }

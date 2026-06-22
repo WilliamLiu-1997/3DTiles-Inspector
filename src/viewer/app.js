@@ -333,6 +333,7 @@ cropController = createCropController({
     rootTransform.getCurrentRootTransformArray(),
   getLocalFrameQuaternion: (referencePoint, target) =>
     geoCamera.getLocalFrameQuaternion(referencePoint, target),
+  getTiles: () => tiles,
   getTilesetBoundingSphere,
 });
 cameraController.setRaycastHitFilter((intersection) =>

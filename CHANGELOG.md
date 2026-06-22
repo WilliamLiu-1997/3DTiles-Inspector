@@ -6,6 +6,11 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Changed
+
+- Changed active crop-sphere editing so short clicks on tiles move the sphere
+  center while drag gestures continue to rotate the camera.
+
 ## [0.2.15] - 2026-06-23
 
 ### Added
