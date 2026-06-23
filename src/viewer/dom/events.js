@@ -23,6 +23,7 @@ export function bindViewerEvents({
     keepSphereConfirmButton,
     keepSphereCreateButton,
     keepSphereRadiusTrackEl,
+    keepSphereSizeValueInput,
     geometricErrorLayerScaleInput,
     geometricErrorScaleInput,
     moveCameraToCoordinateButton,
@@ -72,19 +73,31 @@ export function bindViewerEvents({
     );
   });
   uniformScaleTrackEl.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0) {
+    if (
+      event.button !== 0 ||
+      uniformScaleTrackEl.classList.contains('disabled')
+    ) {
       return;
     }
 
     event.preventDefault();
+    if (!uniformScale.beginTrackDrag(event.clientX)) {
+      return;
+    }
     uniformScaleTrackPointerId = event.pointerId;
     uniformScaleTrackEl.focus();
     uniformScaleTrackEl.classList.add('dragging');
     uniformScaleTrackEl.setPointerCapture(event.pointerId);
-    uniformScale.beginTrackDrag(event.clientX);
   });
   uniformScaleTrackEl.addEventListener('pointermove', (event) => {
     if (event.pointerId !== uniformScaleTrackPointerId) {
+      return;
+    }
+
+    if (uniformScaleTrackEl.classList.contains('disabled')) {
+      uniformScaleTrackPointerId = null;
+      uniformScaleTrackEl.classList.remove('dragging');
+      uniformScaleTrackEl.releasePointerCapture(event.pointerId);
       return;
     }
 
@@ -98,6 +111,9 @@ export function bindViewerEvents({
     uniformScaleTrackPointerId = null;
     uniformScaleTrackEl.classList.remove('dragging');
     uniformScaleTrackEl.releasePointerCapture(event.pointerId);
+    if (uniformScaleTrackEl.classList.contains('disabled')) {
+      return;
+    }
     setUniformScaleStatus();
   });
   uniformScaleTrackEl.addEventListener('pointercancel', (event) => {
@@ -110,6 +126,10 @@ export function bindViewerEvents({
     uniformScaleTrackEl.releasePointerCapture(event.pointerId);
   });
   uniformScaleTrackEl.addEventListener('keydown', (event) => {
+    if (uniformScaleTrackEl.classList.contains('disabled')) {
+      return;
+    }
+
     let handled = true;
     const step = event.shiftKey ? 1 : 0.1;
 
@@ -165,11 +185,13 @@ export function bindViewerEvents({
     }
 
     event.preventDefault();
+    if (!handlers.beginKeepSphereRadiusTrackDrag(event.clientX)) {
+      return;
+    }
     keepSphereRadiusTrackPointerId = event.pointerId;
     keepSphereRadiusTrackEl.focus();
     keepSphereRadiusTrackEl.classList.add('dragging');
     keepSphereRadiusTrackEl.setPointerCapture(event.pointerId);
-    handlers.beginKeepSphereRadiusTrackDrag(event.clientX);
   });
   keepSphereRadiusTrackEl.addEventListener('pointermove', (event) => {
     if (event.pointerId !== keepSphereRadiusTrackPointerId) {
@@ -199,6 +221,10 @@ export function bindViewerEvents({
     handlers.endKeepSphereRadiusTrackDrag();
   });
   keepSphereRadiusTrackEl.addEventListener('keydown', (event) => {
+    if (keepSphereRadiusTrackEl.classList.contains('disabled')) {
+      return;
+    }
+
     let handled = true;
     const step = event.shiftKey ? 1 : 0.1;
 
@@ -212,6 +238,18 @@ export function bindViewerEvents({
 
     if (handled) {
       event.preventDefault();
+    }
+  });
+  keepSphereSizeValueInput.addEventListener('input', () => {
+    handlers.setKeepSphereSizeValue(keepSphereSizeValueInput.value);
+  });
+  keepSphereSizeValueInput.addEventListener('change', () => {
+    if (
+      !handlers.setKeepSphereSizeValue(keepSphereSizeValueInput.value, {
+        commit: true,
+      })
+    ) {
+      setStatus('Crop sphere size must be greater than 0.', true);
     }
   });
   toolbarToggleButton.addEventListener(

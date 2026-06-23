@@ -34,8 +34,8 @@ function buildViewerHtml(viewerConfig) {
         margin: 0;
         overflow: hidden;
         background:
-          radial-gradient(circle at top, rgba(255, 255, 255, 0.95), rgba(236, 240, 245, 0.9)),
-          linear-gradient(180deg, #eef3f8 0%, #dfe7ef 100%);
+          radial-gradient(circle at top, rgba(246, 248, 251, 0.96), rgba(232, 237, 244, 0.92)),
+          linear-gradient(180deg, #e9eef5 0%, #d9e2ec 100%);
         color: #16324f;
       }
 
@@ -1044,17 +1044,27 @@ function buildViewerHtml(viewerConfig) {
             <div class="crop-subsection">
               <div class="toolbar-section-header">
                 <p class="toolbar-section-title">Crop Sphere</p>
-                <p id="keep-sphere-radius-value" class="toolbar-value">None</p>
               </div>
               <div class="coordinate-actions">
                 <button id="keep-sphere-create" class="wide" type="button">Create Sphere</button>
               </div>
               <div class="range-field">
+                <div class="range-field-header">
+                  <span>Size</span>
+                  <input
+                    id="keep-sphere-size-value"
+                    class="scale-value-input"
+                    type="number"
+                    step="any"
+                    value="1"
+                    disabled
+                  />
+                </div>
                 <div
                   id="keep-sphere-radius"
                   class="scale-track disabled"
                   tabindex="0"
-                  aria-label="Crop sphere radius"
+                  aria-label="Crop sphere size"
                   aria-disabled="true"
                 >
                   <span class="scale-track-center" aria-hidden="true"></span>

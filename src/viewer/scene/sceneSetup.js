@@ -34,7 +34,7 @@ export function createViewerScene({
   ktx2Loader.detectSupport(renderer);
 
   const scene = new Scene();
-  scene.background = new Color(0xffffff);
+  scene.background = new Color(0xeeeeee);
 
   const terrainLight = new AmbientLight(0xffffff, Math.PI);
   terrainLight.visible = false;

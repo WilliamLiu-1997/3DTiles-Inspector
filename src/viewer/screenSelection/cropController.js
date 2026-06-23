@@ -201,6 +201,7 @@ export function createCropController({
   let keepSphere = null;
   let keepSphereCenterPick = null;
   let keepSphereTrackDrag = null;
+  let interactionLocked = false;
   let editCursor = '';
   let hasGaussianSplats = false;
   const sphere = new Sphere();
@@ -357,6 +358,9 @@ export function createCropController({
   }
 
   function shouldTrackKeepSphereCenterPick(event) {
+    if (interactionLocked) {
+      return false;
+    }
     if (!isKeepSphereActive()) {
       return false;
     }
@@ -431,7 +435,7 @@ export function createCropController({
     wireframe.quaternion.fromArray(selection.worldQuaternion);
     wireframe.scale.setScalar(selection.worldRadius);
     wireframe.visible =
-      !selection.confirmed || selection.id === activeSelectionId;
+      !interactionLocked && selection.id === activeSelectionId;
     wireframe.updateMatrix();
     wireframe.updateMatrixWorld(true);
   }
@@ -692,6 +696,7 @@ export function createCropController({
       onKeepSphereRemove: removeKeepSphere,
       onKeepSphereSelect: selectKeepSphere,
       tilesetHasGaussianSplats: hasGaussianSplats,
+      interactionLocked,
     });
   }
 
@@ -1064,8 +1069,8 @@ export function createCropController({
     );
   }
 
-  function formatKeepSphereRadius(radius) {
-    const value = Number(radius);
+  function formatKeepSphereSize(size) {
+    const value = Number(size);
     if (!Number.isFinite(value)) {
       return '0';
     }
@@ -1123,7 +1128,9 @@ export function createCropController({
     syncFarHandles();
     syncTransformControlsState();
     refreshUi();
-    setStatus('Created crop sphere at the tileset center. Adjust radius or move it, then Confirm or Cancel.');
+    setStatus(
+      'Created crop sphere at the tileset center. Adjust size or move it, then Confirm or Cancel.',
+    );
   }
 
   function confirmKeepSphere() {
@@ -1191,35 +1198,66 @@ export function createCropController({
     refreshUi();
     setStatus(
       activeSelectionId === keepSphere?.id
-        ? 'Drag the crop sphere transform controls or adjust radius.'
+        ? 'Drag the crop sphere transform controls or adjust size.'
         : 'Crop sphere deactivated.',
     );
   }
 
   function setKeepSphereRadiusExponent(exponent, { commit = false } = {}) {
-    if (!keepSphere) {
+    if (!keepSphere || interactionLocked) {
       return false;
     }
     const nextExponent = Number(exponent);
     if (!Number.isFinite(nextExponent)) {
       return false;
     }
+    const nextScale = 2 ** nextExponent;
+    const nextLocalRadius = keepSphere.localBaseRadius * nextScale;
+    if (!Number.isFinite(nextLocalRadius)) {
+      return false;
+    }
     keepSphere.radiusExponent = nextExponent;
     keepSphere.localRadius = Math.max(
       KEEP_SPHERE_MIN_RADIUS,
-      keepSphere.localBaseRadius * 2 ** nextExponent,
+      nextLocalRadius,
     );
     updateKeepSphereWorldState();
     syncEditSdfs();
     refreshUi();
     if (commit) {
-      setStatus(`Crop sphere radius set to ${formatKeepSphereRadius(keepSphere.worldRadius)}.`);
+      setStatus(
+        `Crop sphere size set to ${formatKeepSphereSize(keepSphere.worldRadius)}.`,
+      );
+    }
+    return true;
+  }
+
+  function setKeepSphereSizeValue(value, { commit = false } = {}) {
+    const nextWorldRadius = Number(value);
+    if (
+      !keepSphere ||
+      interactionLocked ||
+      !Number.isFinite(nextWorldRadius) ||
+      nextWorldRadius <= 0
+    ) {
+      return false;
+    }
+    const rootScale = getCurrentRootScale();
+    const nextLocalRadius = nextWorldRadius / rootScale;
+    const nextExponent = Math.log2(nextLocalRadius / keepSphere.localBaseRadius);
+    if (!setKeepSphereRadiusExponent(nextExponent)) {
+      return false;
+    }
+    if (commit) {
+      setStatus(
+        `Crop sphere size set to ${formatKeepSphereSize(keepSphere.worldRadius)}.`,
+      );
     }
     return true;
   }
 
   function beginKeepSphereRadiusTrackDrag(clientX) {
-    if (!keepSphere) {
+    if (!keepSphere || interactionLocked) {
       return false;
     }
     keepSphereTrackDrag = {
@@ -1234,7 +1272,7 @@ export function createCropController({
   }
 
   function setKeepSphereRadiusFromTrackClientX(clientX) {
-    if (!keepSphere || !keepSphereTrackDrag) {
+    if (!keepSphere || !keepSphereTrackDrag || interactionLocked) {
       return false;
     }
     const deltaX = clientX - keepSphereTrackDrag.startClientX;
@@ -1258,12 +1296,17 @@ export function createCropController({
       '0px',
     );
     if (commit && keepSphere) {
-      setStatus(`Crop sphere radius set to ${formatKeepSphereRadius(keepSphere.worldRadius)}.`);
+      setStatus(
+        `Crop sphere size set to ${formatKeepSphereSize(keepSphere.worldRadius)}.`,
+      );
     }
     return true;
   }
 
   function nudgeKeepSphereRadiusExponent(delta) {
+    if (interactionLocked) {
+      return false;
+    }
     return setKeepSphereRadiusExponent(
       (keepSphere?.radiusExponent || 0) + delta,
       { commit: true },
@@ -1375,6 +1418,13 @@ export function createCropController({
   }
 
   function handleTransformControlObjectChange(object) {
+    if (interactionLocked) {
+      return !!(
+        object?.userData?.keepSphereHandle ||
+        object?.userData?.screenSelectionFarHandle
+      );
+    }
+
     if (object?.userData?.keepSphereHandle) {
       if (!keepSphere || object.userData.screenSelectionId !== keepSphere.id) {
         return true;
@@ -1500,6 +1550,27 @@ export function createCropController({
     refreshUi();
   }
 
+  function setInteractionLocked(value) {
+    const locked = !!value;
+    if (interactionLocked === locked) {
+      return;
+    }
+
+    interactionLocked = locked;
+    if (interactionLocked) {
+      keepSphereCenterPick = null;
+      keepSphereTrackDrag = null;
+      viewerElements.keepSphereRadiusTrackEl?.classList.remove('dragging');
+      viewerElements.keepSphereRadiusTrackEl?.style.setProperty(
+        '--scale-track-offset',
+        '0px',
+      );
+    }
+    syncWorldState();
+    refreshUi();
+    syncTransformControlsState();
+  }
+
   function deactivate() {
     activeSelectionId = null;
     keepSphereCenterPick = null;
@@ -1614,7 +1685,10 @@ export function createCropController({
     nudgeKeepSphereRadiusExponent,
     notifyTransformModeChanged,
     setKeepSphereRadiusFromTrackClientX,
+    setKeepSphereSizeValue,
     setHasGaussianSplats,
+    setInteractionLocked,
+    isInteractionLocked: () => interactionLocked,
     shouldCapturePointerDown,
     syncWorldState,
     toggle,

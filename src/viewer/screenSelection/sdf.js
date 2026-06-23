@@ -98,7 +98,7 @@ export function setScreenSelectionEditSelection(edit, selection, style) {
   const sphere = selection?.type === 'sphere';
   edit.sdfs = null;
   edit.clear();
-  edit.invert = sphere ? hidden : !!selection;
+  edit.invert = !!selection;
   edit.rgbaBlendMode = hidden
     ? SplatEditRgbaBlendMode.MULTIPLY
     : SplatEditRgbaBlendMode.SET_RGB;

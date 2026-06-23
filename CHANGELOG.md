@@ -6,10 +6,27 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-06-23
+
+### Added
+
+- Added an editable crop-sphere size input for setting the sphere radius
+  directly.
+
 ### Changed
 
 - Changed active crop-sphere editing so short clicks on tiles move the sphere
   center while drag gestures continue to rotate the camera.
+- Changed active crop-sphere previews to highlight splats outside the sphere
+  while leaving inside splats unchanged.
+- Changed the viewer background from pure white to a slightly darker neutral
+  tone.
+
+### Fixed
+
+- Fixed pending crop-sphere deactivation leaving the sphere wireframe visible.
+- Fixed save operations allowing crop-sphere size, crop-sphere transform, or
+  root scale track changes while saving was in progress.
 
 ## [0.2.15] - 2026-06-23
 

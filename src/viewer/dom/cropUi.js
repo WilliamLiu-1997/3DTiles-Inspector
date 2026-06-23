@@ -10,6 +10,7 @@ export function updateCropControls({
   pendingScreenSelections,
   screenSelections,
   tilesetHasGaussianSplats,
+  interactionLocked = false,
 }) {
   const {
     cropCountValueEl,
@@ -22,17 +23,18 @@ export function updateCropControls({
     keepSphereCreateButton,
     keepSphereListEl,
     keepSphereRadiusTrackEl,
-    keepSphereRadiusValueEl,
+    keepSphereSizeValueInput,
   } = elements;
   const hasPendingScreenSelection = pendingScreenSelections.length > 0;
   const hasKeepSphere = !!keepSphere;
   const hasPendingKeepSphere = hasKeepSphere && !keepSphere.confirmed;
 
   cropScreenSelectButton.disabled =
-    !tilesetHasGaussianSplats || hasPendingScreenSelection;
+    interactionLocked || !tilesetHasGaussianSplats || hasPendingScreenSelection;
   cropScreenConfirmButton.disabled =
-    !tilesetHasGaussianSplats || !hasPendingScreenSelection;
+    interactionLocked || !tilesetHasGaussianSplats || !hasPendingScreenSelection;
   cropScreenCancelButton.disabled =
+    interactionLocked ||
     !tilesetHasGaussianSplats ||
     (!pendingScreenSelectionMode && !hasPendingScreenSelection);
   cropScreenSelectButton.classList.toggle('active', pendingScreenSelectionMode);
@@ -40,19 +42,32 @@ export function updateCropControls({
     screenSelections.length + pendingScreenSelections.length,
   );
   keepSphereCreateButton.disabled =
-    !tilesetHasGaussianSplats || hasKeepSphere;
+    interactionLocked || !tilesetHasGaussianSplats || hasKeepSphere;
   keepSphereConfirmButton.disabled =
-    !tilesetHasGaussianSplats || !hasPendingKeepSphere;
+    interactionLocked || !tilesetHasGaussianSplats || !hasPendingKeepSphere;
   keepSphereCancelButton.disabled =
-    !tilesetHasGaussianSplats || !hasPendingKeepSphere;
-  keepSphereRadiusTrackEl.classList.toggle('disabled', !hasKeepSphere);
+    interactionLocked || !tilesetHasGaussianSplats || !hasPendingKeepSphere;
+  const keepSphereEditingDisabled = !hasKeepSphere || interactionLocked;
+  keepSphereRadiusTrackEl.classList.toggle(
+    'disabled',
+    keepSphereEditingDisabled,
+  );
   keepSphereRadiusTrackEl.setAttribute(
     'aria-disabled',
-    hasKeepSphere ? 'false' : 'true',
+    keepSphereEditingDisabled ? 'true' : 'false',
   );
-  keepSphereRadiusValueEl.textContent = hasKeepSphere
-    ? formatRadius(keepSphere.worldRadius)
-    : 'None';
+  const keepSphereSize = hasKeepSphere ? formatSize(keepSphere.worldRadius) : '';
+  keepSphereRadiusTrackEl.setAttribute(
+    'aria-label',
+    hasKeepSphere
+      ? `Crop sphere size ${keepSphereSize}`
+      : 'Crop sphere size',
+  );
+  keepSphereRadiusTrackEl.title = hasKeepSphere
+    ? `Crop sphere size ${keepSphereSize}`
+    : 'Crop sphere size';
+  keepSphereSizeValueInput.disabled = keepSphereEditingDisabled;
+  keepSphereSizeValueInput.value = keepSphereSize;
 
   keepSphereListEl.replaceChildren();
   if (hasKeepSphere) {
@@ -95,10 +110,10 @@ export function updateCropControls({
     });
 }
 
-function formatRadius(radius) {
-  const value = Number(radius);
+function formatSize(size) {
+  const value = Number(size);
   if (!Number.isFinite(value)) {
-    return 'None';
+    return '';
   }
   const abs = Math.abs(value);
   if (abs > 0 && (abs < 0.001 || abs >= 1000000)) {

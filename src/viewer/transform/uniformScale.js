@@ -112,6 +112,7 @@ export function createUniformScaleController({
     trackDragStartClientX = clientX;
     trackDragStartExponent = getScaleExponent();
     uniformScaleTrackEl.style.setProperty('--scale-track-offset', '0px');
+    return true;
   }
 
   function setScaleFromTrackClientX(clientX) {

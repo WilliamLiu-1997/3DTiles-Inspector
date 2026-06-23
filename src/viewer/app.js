@@ -158,6 +158,7 @@ let setPositionController = null;
 let transformModeController = null;
 let rootTransform = null;
 let savedControlDisabledStates = null;
+let savedUniformScaleTrackDisabledState = null;
 
 function setSaveUiLocked(locked) {
   if (!toolbarDockEl) {
@@ -179,8 +180,15 @@ function setSaveUiLocked(locked) {
         savedControlDisabledStates.set(control, control.disabled);
         control.disabled = true;
       });
+    savedUniformScaleTrackDisabledState =
+      uniformScaleTrackEl?.classList.contains('disabled') ?? false;
+    uniformScaleTrackEl?.classList.add('disabled');
+    uniformScaleTrackEl?.classList.remove('dragging');
+    uniformScaleTrackEl?.setAttribute('aria-disabled', 'true');
+    uniformScaleTrackEl?.style.setProperty('--scale-track-offset', '0px');
     toolbarDockEl.classList.add('saving');
     toolbarDockEl.setAttribute('aria-busy', 'true');
+    cropController?.setInteractionLocked(true);
     return;
   }
 
@@ -196,6 +204,19 @@ function setSaveUiLocked(locked) {
     }
   });
   savedControlDisabledStates = null;
+  if (uniformScaleTrackEl) {
+    uniformScaleTrackEl.classList.toggle(
+      'disabled',
+      !!savedUniformScaleTrackDisabledState,
+    );
+    if (savedUniformScaleTrackDisabledState) {
+      uniformScaleTrackEl.setAttribute('aria-disabled', 'true');
+    } else {
+      uniformScaleTrackEl.removeAttribute('aria-disabled');
+    }
+  }
+  savedUniformScaleTrackDisabledState = null;
+  cropController?.setInteractionLocked(false);
 }
 
 cameraController.setPointerDownFilter((event) => {
@@ -633,6 +654,7 @@ bindViewerEvents({
     nudgeKeepSphereRadiusExponent: cropController.nudgeKeepSphereRadiusExponent,
     setKeepSphereRadiusFromTrackClientX:
       cropController.setKeepSphereRadiusFromTrackClientX,
+    setKeepSphereSizeValue: cropController.setKeepSphereSizeValue,
     setTerrainEnabled: viewerToggles.setTerrainEnabled,
     toggleBoundingVolume: viewerToggles.toggleBoundingVolume,
     toggleCropScreenSelectionMode: cropController.toggle,

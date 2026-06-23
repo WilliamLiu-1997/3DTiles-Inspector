@@ -16,8 +16,8 @@ export function getViewerElements() {
     keepSphereCreateButton: document.getElementById('keep-sphere-create'),
     keepSphereListEl: document.getElementById('keep-sphere-list'),
     keepSphereRadiusTrackEl: document.getElementById('keep-sphere-radius'),
-    keepSphereRadiusValueEl: document.getElementById(
-      'keep-sphere-radius-value',
+    keepSphereSizeValueInput: document.getElementById(
+      'keep-sphere-size-value',
     ),
     geometricErrorLayerScaleInput: document.getElementById(
       'geometric-error-layer-scale',

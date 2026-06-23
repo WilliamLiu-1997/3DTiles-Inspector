@@ -22,7 +22,9 @@ export function createTransformModeController({
 
   function syncControls() {
     const pendingPositionPick =
-      setPositionController.isPending() || cropController.getPendingMode();
+      setPositionController.isPending() ||
+      cropController.getPendingMode() ||
+      cropController.isInteractionLocked();
     const activeCropScreenSelection = cropController.getActiveSelection();
     const activeKeepSphere =
       activeCropScreenSelection?.type === 'sphere'
