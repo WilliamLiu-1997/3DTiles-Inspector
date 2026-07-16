@@ -52,19 +52,7 @@ export function updateTilesRendererGroupMatrices(tilesRenderer) {
 
   group.updateMatrixWorld(true);
 
-  if (
-    group.matrixWorldInverse &&
-    typeof group.matrixWorldInverse.copy === 'function'
-  ) {
-    group.matrixWorldInverse.copy(group.matrixWorld).invert();
-  }
-}
-
-export function refreshLoadedTileSceneMatrices(tilesRenderer) {
-  if (
-    !tilesRenderer ||
-    typeof tilesRenderer.forEachLoadedModel !== 'function'
-  ) {
+  if (typeof tilesRenderer.forEachLoadedModel !== 'function') {
     return;
   }
 

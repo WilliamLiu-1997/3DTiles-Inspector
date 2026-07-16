@@ -1362,7 +1362,7 @@ async function assertLoadedTileSceneMatricesRefresh(tempDir) {
     outfile: tilesetTransformBundlePath,
     platform: 'node',
   });
-  const { refreshLoadedTileSceneMatrices } = require(
+  const { updateTilesRendererGroupMatrices } = require(
     tilesetTransformBundlePath
   );
   const { Group } = require('three');
@@ -1389,12 +1389,19 @@ async function assertLoadedTileSceneMatricesRefresh(tempDir) {
   loadedChild.matrixWorldNeedsUpdate = false;
 
   tilesGroup.matrixWorld.makeTranslation(20, 0, 0);
-  refreshLoadedTileSceneMatrices({
+  let groupMatrixUpdated = false;
+  updateTilesRendererGroupMatrices({
+    group: {
+      updateMatrixWorld(force) {
+        groupMatrixUpdated = force;
+      },
+    },
     forEachLoadedModel(callback) {
       callback(loadedScene);
     },
   });
 
+  assert.strictEqual(groupMatrixUpdated, true);
   assert.strictEqual(loadedScene.matrixWorld.elements[12], 22);
   assert.strictEqual(loadedChild.matrixWorld.elements[12], 25);
 }

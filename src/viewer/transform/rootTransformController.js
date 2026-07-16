@@ -5,7 +5,6 @@ import {
   getIncrementalMatrix,
   getObjectMatrix,
   getRootTransform,
-  refreshLoadedTileSceneMatrices,
   refreshSavedRootMatrix,
   resetEditableObjectTransform,
   setSavedRootMatrixFromTransform,
@@ -76,7 +75,6 @@ export function createRootTransformController({
     editableGroup.updateMatrixWorld(true);
     const tiles = getTiles();
     updateTilesRendererGroupMatrices(tiles);
-    refreshLoadedTileSceneMatrices(tiles);
     onTransformsInvalidated?.();
     transformControlsHelper?.updateMatrixWorld(true);
   }
@@ -251,7 +249,6 @@ export function createRootTransformController({
     editableGroup.updateMatrixWorld(true);
     const tiles = getTiles();
     updateTilesRendererGroupMatrices(tiles);
-    refreshLoadedTileSceneMatrices(tiles);
   }
 
   return {
