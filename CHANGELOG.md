@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-07-16
+
 ### Changed
 
 - Updated `3d-tiles-renderer` from `0.4.28` to `0.5.0`,
