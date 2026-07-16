@@ -1,17 +1,18 @@
 import { TilesRenderer } from '3d-tiles-renderer';
-import { ImplicitTilingPlugin } from '3d-tiles-renderer/src/core/plugins/ImplicitTilingPlugin.js';
-import { CesiumIonAuthPlugin } from '3d-tiles-renderer/src/three/plugins/CesiumIonAuthPlugin.js';
-import { DebugTilesPlugin } from '3d-tiles-renderer/src/three/plugins/DebugTilesPlugin.js';
-import { GLTFExtensionsPlugin } from '3d-tiles-renderer/src/three/plugins/GLTFExtensionsPlugin.js';
-import { QuantizedMeshPlugin } from '3d-tiles-renderer/src/three/plugins/QuantizedMeshPlugin.js';
-import { TileCompressionPlugin } from '3d-tiles-renderer/src/three/plugins/TileCompressionPlugin.js';
-import { UnloadTilesPlugin } from '3d-tiles-renderer/src/three/plugins/UnloadTilesPlugin.js';
-import { TilesFadePlugin } from '3d-tiles-renderer/src/three/plugins/fade/TilesFadePlugin.js';
-import { GeneratedSurfacePlugin } from '3d-tiles-renderer/src/three/plugins/images/GeneratedSurfacePlugin.js';
+import { LRUCache, PriorityQueue } from '3d-tiles-renderer/core';
+import { ImplicitTilingPlugin } from '3d-tiles-renderer/core/plugins';
 import {
+  CesiumIonAuthPlugin,
+  DebugTilesPlugin,
+  GeneratedSurfacePlugin,
+  GLTFExtensionsPlugin,
   ImageOverlayPlugin,
+  QuantizedMeshPlugin,
+  TileCompressionPlugin,
+  TilesFadePlugin,
+  UnloadTilesPlugin,
   XYZTilesOverlay,
-} from '3d-tiles-renderer/src/three/plugins/images/ImageOverlayPlugin.js';
+} from '3d-tiles-renderer/three/plugins';
 import { GaussianSplatPlugin } from '3d-tiles-rendererjs-3dgs-plugin';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { forceOpaqueScene } from '../utils.js';
@@ -27,8 +28,8 @@ const CESIUM_ION_TERRAIN = {
 export const DEFAULT_ERROR_TARGET = 16;
 const DEFAULT_TERRAIN_ERROR_TARGET = 16;
 
-function createSatelliteOverlay(preprocessURL) {
-  return new XYZTilesOverlay({
+function createSatelliteOverlay(preprocessURL, downloadQueue) {
+  const overlay = new XYZTilesOverlay({
     url: SATELLITE_IMAGERY.url,
     levels: SATELLITE_IMAGERY.levels,
     tileDimension: 256,
@@ -37,6 +38,33 @@ function createSatelliteOverlay(preprocessURL) {
     opacity: 1,
     preprocessURL,
   });
+  overlay.downloadQueue = downloadQueue;
+  return overlay;
+}
+
+function configureGlobeTilesResources(tiles) {
+  const lruCache = new LRUCache();
+  lruCache.unloadPriorityCallback = tiles.lruCache.unloadPriorityCallback;
+  lruCache.minSize = 256;
+  lruCache.maxSize = 1024;
+  lruCache.minBytesSize = 2 ** 30 / 8;
+  lruCache.maxBytesSize = 2 ** 30 / 2;
+  lruCache.unloadPercent = 0.1;
+
+  const downloadQueue = new PriorityQueue();
+  downloadQueue.priorityCallback = tiles.downloadQueue.priorityCallback;
+
+  const parseQueue = new PriorityQueue();
+  parseQueue.priorityCallback = tiles.parseQueue.priorityCallback;
+
+  const processNodeQueue = new PriorityQueue();
+  processNodeQueue.priorityCallback = tiles.processNodeQueue.priorityCallback;
+  processNodeQueue.maxJobs = tiles.processNodeQueue.maxJobs;
+
+  tiles.lruCache = lruCache;
+  tiles.downloadQueue = downloadQueue;
+  tiles.parseQueue = parseQueue;
+  tiles.processNodeQueue = processNodeQueue;
 }
 
 function configureGlobeTiles(next, { camera, preprocessURL, renderer }) {
@@ -54,7 +82,11 @@ function configureGlobeTiles(next, { camera, preprocessURL, renderer }) {
 
 export function createImageryGlobeTiles(options) {
   const next = new TilesRenderer();
-  const satelliteOverlay = createSatelliteOverlay(options.preprocessURL);
+  configureGlobeTilesResources(next);
+  const satelliteOverlay = createSatelliteOverlay(
+    options.preprocessURL,
+    next.downloadQueue,
+  );
   next.downloadQueue.maxJobs = 8;
   next.parseQueue.maxJobs = 2;
   next.registerPlugin(
@@ -80,7 +112,11 @@ export function createTerrainGlobeTiles(options) {
   }
 
   const next = new TilesRenderer();
-  const satelliteOverlay = createSatelliteOverlay(options.preprocessURL);
+  configureGlobeTilesResources(next);
+  const satelliteOverlay = createSatelliteOverlay(
+    options.preprocessURL,
+    next.downloadQueue,
+  );
   next.downloadQueue.maxJobs = 8;
   next.parseQueue.maxJobs = 2;
   next.registerPlugin(

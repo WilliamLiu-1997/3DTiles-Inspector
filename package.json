@@ -55,11 +55,11 @@
   },
   "devDependencies": {
     "@sparkjsdev/spark": "2.1.0",
-    "3d-tiles-renderer": "0.4.28",
-    "3d-tiles-rendererjs-3dgs-plugin": "0.1.14",
+    "3d-tiles-renderer": "0.5.0",
+    "3d-tiles-rendererjs-3dgs-plugin": "0.1.15",
     "esbuild": "^0.25.11"
   },
   "dependencies": {
-    "three": "0.180.0"
+    "three": "0.185.1"
   }
 }

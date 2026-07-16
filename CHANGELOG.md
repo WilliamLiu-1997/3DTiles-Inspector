@@ -6,6 +6,19 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Changed
+
+- Updated `3d-tiles-renderer` from `0.4.28` to `0.5.0`,
+  `3d-tiles-rendererjs-3dgs-plugin` from `0.1.14` to `0.1.15`, and Three.js
+  from `0.180.0` to `0.185.1`.
+- Isolated globe cache and processing queues from the inspected tileset while
+  keeping globe imagery downloads on the globe queue.
+
+### Fixed
+
+- Fixed Gaussian splats drawing over the mouse anchor when reversed depth is
+  enabled.
+
 ## [0.2.16] - 2026-06-23
 
 ### Added
