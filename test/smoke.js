@@ -2,8 +2,10 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const zlib = require('zlib');
 const { spawnSync } = require('child_process');
+const esbuild = require('esbuild');
 
 const api = require('../src');
 const { writeFileAtomic } = require('../src/server/fileUtils');
@@ -1285,6 +1287,118 @@ async function assertScaleSaveScalesGeometricErrors(baseDir) {
   assert.strictEqual(summary.viewer_geometric_error_scale, 6);
 }
 
+async function assertDepthAwareRenderOrder(tempDir) {
+  const renderOrderBundlePath = path.join(tempDir, 'render-order.cjs');
+  await esbuild.build({
+    bundle: true,
+    entryPoints: [
+      path.join(__dirname, '../src/viewer/scene/renderOrder.js'),
+    ],
+    format: 'cjs',
+    logLevel: 'silent',
+    outfile: renderOrderBundlePath,
+    platform: 'node',
+  });
+  const { getDepthAwareRenderOrder } = require(renderOrderBundlePath);
+  const { WebGLRenderList } = await import(
+    pathToFileURL(
+      path.join(
+        __dirname,
+        '../node_modules/three/src/renderers/webgl/WebGLRenderLists.js',
+      ),
+    ).href
+  );
+  const priorities = [
+    ['content', 0],
+    ['crop overlay', 1000002],
+    ['transform controls', 1000003],
+    ['camera pivot', Infinity],
+  ];
+  const expected = priorities.map(([name]) => name);
+
+  for (const reversedDepthBuffer of [false, true]) {
+    const list = new WebGLRenderList();
+    const material = { id: 1, transmission: 0, transparent: true };
+    priorities.forEach(([name, logicalRenderOrder], index) => {
+      list.push(
+        {
+          id: index + 1,
+          isInstancedMesh: false,
+          isSkinnedMesh: false,
+          name,
+          renderOrder: getDepthAwareRenderOrder(
+            logicalRenderOrder,
+            reversedDepthBuffer,
+          ),
+        },
+        {},
+        material,
+        0,
+        0,
+        null,
+      );
+    });
+    list.sort(null, null, reversedDepthBuffer);
+    assert.deepStrictEqual(
+      list.transparent.map(({ object }) => object.name),
+      expected,
+    );
+  }
+}
+
+async function assertLoadedTileSceneMatricesRefresh(tempDir) {
+  const tilesetTransformBundlePath = path.join(
+    tempDir,
+    'tileset-transform.cjs',
+  );
+  await esbuild.build({
+    bundle: true,
+    entryPoints: [
+      path.join(__dirname, '../src/viewer/transform/tilesetTransform.js'),
+    ],
+    external: ['three'],
+    format: 'cjs',
+    logLevel: 'silent',
+    outfile: tilesetTransformBundlePath,
+    platform: 'node',
+  });
+  const { refreshLoadedTileSceneMatrices } = require(
+    tilesetTransformBundlePath
+  );
+  const { Group } = require('three');
+  const tilesGroup = new Group();
+  const loadedScene = new Group();
+  const loadedChild = new Group();
+
+  tilesGroup.add(loadedScene);
+  loadedScene.add(loadedChild);
+  loadedScene.matrixAutoUpdate = false;
+  loadedChild.matrixAutoUpdate = false;
+  loadedScene.matrix.makeTranslation(2, 0, 0);
+  loadedChild.matrix.makeTranslation(3, 0, 0);
+  tilesGroup.matrixWorld.makeTranslation(10, 0, 0);
+  loadedScene.matrixWorld.multiplyMatrices(
+    tilesGroup.matrixWorld,
+    loadedScene.matrix,
+  );
+  loadedChild.matrixWorld.multiplyMatrices(
+    loadedScene.matrixWorld,
+    loadedChild.matrix,
+  );
+  loadedScene.matrixWorldNeedsUpdate = false;
+  loadedChild.matrixWorldNeedsUpdate = false;
+
+  tilesGroup.matrixWorld.makeTranslation(20, 0, 0);
+  refreshLoadedTileSceneMatrices({
+    forEachLoadedModel(callback) {
+      callback(loadedScene);
+    },
+  });
+
+  assert.strictEqual(loadedScene.matrixWorld.elements[12], 22);
+  assert.strictEqual(loadedChild.matrixWorld.elements[12], 25);
+}
+
 async function main() {
   assert.strictEqual(typeof api.InspectorError, 'function');
   assert.strictEqual(typeof api.startInspectorSession, 'function');
@@ -1303,6 +1417,8 @@ async function main() {
   );
 
   try {
+    await assertDepthAwareRenderOrder(tempDir);
+    await assertLoadedTileSceneMatricesRefresh(tempDir);
     await assertAtomicWriteRetriesLockedTarget(tempDir);
     await assertScaleSaveScalesGeometricErrors(tempDir);
 

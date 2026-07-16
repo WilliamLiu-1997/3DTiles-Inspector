@@ -70,7 +70,8 @@ export function refreshLoadedTileSceneMatrices(tilesRenderer) {
 
   tilesRenderer.forEachLoadedModel((loadedScene) => {
     if (typeof loadedScene.updateWorldMatrix === 'function') {
-      loadedScene.updateWorldMatrix(false, true);
+      // Three.js r185 only recomputes clean, static matrices when forced.
+      loadedScene.updateWorldMatrix(false, true, true);
     } else {
       loadedScene.updateMatrixWorld(true);
     }

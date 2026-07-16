@@ -48,6 +48,7 @@ import {
 } from './editOverlay.js';
 import { updateCropControls } from '../dom/cropUi.js';
 import { mouseToCoords, setRaycasterFromCamera } from '../utils.js';
+import { getDepthAwareRenderOrder } from '../scene/renderOrder.js';
 
 const CAMERA_POSITION_EPSILON_SQ = 1e-12;
 const CAMERA_QUATERNION_EPSILON = 1e-10;
@@ -180,6 +181,7 @@ export function createCropController({
   rectEl,
   scene,
   screenSelectionSplatEdit,
+  reversedDepthBuffer,
   setStatus,
   setTransformMode,
   syncTransformControlsState,
@@ -413,11 +415,20 @@ export function createCropController({
     });
     const visibleWireframe = new LineSegments(geometry, visibleMaterial);
     const overlayWireframe = new LineSegments(geometry, overlayMaterial);
-    visibleWireframe.renderOrder = KEEP_SPHERE_WIREFRAME_RENDER_ORDER;
-    overlayWireframe.renderOrder = KEEP_SPHERE_WIREFRAME_RENDER_ORDER + 1;
+    const visibleRenderOrder = getDepthAwareRenderOrder(
+      KEEP_SPHERE_WIREFRAME_RENDER_ORDER,
+      reversedDepthBuffer,
+    );
+    const overlayRenderOrder = getDepthAwareRenderOrder(
+      KEEP_SPHERE_WIREFRAME_RENDER_ORDER + 1,
+      reversedDepthBuffer,
+    );
+    visibleWireframe.renderOrder = visibleRenderOrder;
+    overlayWireframe.renderOrder = overlayRenderOrder;
+    // Group.renderOrder becomes groupOrder and sorts before child renderOrder.
+    // Leave the transform root at its default so controls can render last.
     group.add(visibleWireframe);
     group.add(overlayWireframe);
-    group.renderOrder = KEEP_SPHERE_WIREFRAME_RENDER_ORDER;
     group.userData.keepSphereHandle = true;
     group.userData.screenSelectionId = selection.id;
     selection.wireframe = group;
@@ -677,7 +688,9 @@ export function createCropController({
 
     entries.forEach(({ selection }) => {
       if (!selection.farHandle) {
-        scene.add(createScreenSelectionFarHandle(selection));
+        scene.add(
+          createScreenSelectionFarHandle(selection, reversedDepthBuffer),
+        );
       }
     });
     syncWorldState();

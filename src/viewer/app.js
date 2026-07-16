@@ -230,6 +230,7 @@ const { transformControls, transformControlsHelper } =
     domElement: renderer.domElement,
     scene,
     transformHandle,
+    reversedDepthBuffer: renderer.capabilities.reversedDepthBuffer,
     callbacks: {
       onObjectChange: (object) =>
         cropController?.handleTransformControlObjectChange(object) ?? false,
@@ -344,6 +345,7 @@ cropController = createCropController({
   rectEl: screenSelectionRectEl,
   scene,
   screenSelectionSplatEdit,
+  reversedDepthBuffer: renderer.capabilities.reversedDepthBuffer,
   setStatus,
   setTransformMode: (mode) => transformModeController.setMode(mode),
   syncTransformControlsState: () => transformModeController.syncControls(),

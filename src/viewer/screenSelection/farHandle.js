@@ -25,6 +25,7 @@ import {
   getSelectionTransformDelta,
   normalizeFarPlaneAxes,
 } from './geometry.js';
+import { getDepthAwareRenderOrder } from '../scene/renderOrder.js';
 
 function pushFarHandleSegment(vertices, start, end) {
   vertices.push(start[0], start[1], start[2] || 0, end[0], end[1], end[2] || 0);
@@ -179,7 +180,10 @@ function createFarHandleMaterial({ depthTest, opacity = 1 }) {
   });
 }
 
-export function createScreenSelectionFarHandle(selection) {
+export function createScreenSelectionFarHandle(
+  selection,
+  reversedDepthBuffer = false,
+) {
   const handle = new Group();
   const solidMaterial = createFarHandleMaterial({
     depthTest: true,
@@ -201,19 +205,28 @@ export function createScreenSelectionFarHandle(selection) {
   const overlayGrid = new LineSegments(gridGeometry, overlayMaterial);
   const solidGuide = new LineSegments(guideGeometry, solidGuideMaterial);
   const overlayGuide = new LineSegments(guideGeometry, overlayGuideMaterial);
+  const solidRenderOrder = getDepthAwareRenderOrder(
+    SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER,
+    reversedDepthBuffer,
+  );
+  const overlayRenderOrder = getDepthAwareRenderOrder(
+    SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER + 1,
+    reversedDepthBuffer,
+  );
 
   handle.name = `Screen Selection ${selection.id} Far`;
-  handle.renderOrder = SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER;
+  // Keep the Group at the default order so its groupOrder does not override
+  // the child material priorities below.
   handle.userData.screenSelectionFarHandle = true;
   handle.userData.screenSelectionId = selection.id;
   solidGrid.name = `${handle.name} Grid`;
-  solidGrid.renderOrder = SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER;
+  solidGrid.renderOrder = solidRenderOrder;
   overlayGrid.name = `${handle.name} Grid Overlay`;
-  overlayGrid.renderOrder = SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER + 1;
+  overlayGrid.renderOrder = overlayRenderOrder;
   solidGuide.name = `${handle.name} Guide`;
-  solidGuide.renderOrder = SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER;
+  solidGuide.renderOrder = solidRenderOrder;
   overlayGuide.name = `${handle.name} Guide Overlay`;
-  overlayGuide.renderOrder = SCREEN_SELECTION_FAR_HANDLE_RENDER_ORDER + 1;
+  overlayGuide.renderOrder = overlayRenderOrder;
   handle.add(solidGrid, solidGuide, overlayGrid, overlayGuide);
   selection.farHandle = handle;
   selection.farHandleGridGeometry = gridGeometry;

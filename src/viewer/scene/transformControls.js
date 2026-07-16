@@ -1,6 +1,7 @@
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { getDepthAwareRenderOrder } from './renderOrder.js';
 
-const TRANSFORM_CONTROL_RENDER_ORDER = 1000002;
+const TRANSFORM_CONTROL_RENDER_ORDER = 1000003;
 
 function forceOverlayMaterial(material) {
   if (!material) {
@@ -17,10 +18,14 @@ function forceOverlayMaterial(material) {
   material.needsUpdate = true;
 }
 
-function forceOverlayRendering(object) {
-  object.renderOrder = TRANSFORM_CONTROL_RENDER_ORDER;
+function forceOverlayRendering(object, reversedDepthBuffer) {
+  const renderOrder = getDepthAwareRenderOrder(
+    TRANSFORM_CONTROL_RENDER_ORDER,
+    reversedDepthBuffer,
+  );
+  object.renderOrder = renderOrder;
   object.traverse((entry) => {
-    entry.renderOrder = TRANSFORM_CONTROL_RENDER_ORDER;
+    entry.renderOrder = renderOrder;
     forceOverlayMaterial(entry.material);
   });
 }
@@ -31,6 +36,7 @@ export function createViewerTransformControls({
   domElement,
   scene,
   transformHandle,
+  reversedDepthBuffer,
   callbacks,
   getSyncingTransformHandle,
 }) {
@@ -41,7 +47,7 @@ export function createViewerTransformControls({
       : null;
 
   if (transformControlsHelper) {
-    forceOverlayRendering(transformControlsHelper);
+    forceOverlayRendering(transformControlsHelper, reversedDepthBuffer);
   }
   transformControls.setMode('translate');
   transformControls.setSpace('local');

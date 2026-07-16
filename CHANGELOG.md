@@ -6,6 +6,15 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.18] - 2026-07-16
+
+### Fixed
+
+- Fixed reversed-depth render ordering for transform controls, crop guides,
+  and crop-sphere wireframes with Three.js 0.185.x.
+- Fixed translate, rotate, and scale edits not updating already loaded tiles
+  with Three.js 0.185.x.
+
 ## [0.2.17] - 2026-07-16
 
 ### Changed
