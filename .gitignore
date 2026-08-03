@@ -5,3 +5,7 @@ out_tiles1/
 out_tiles2/
 node_modules/
 dist/
+
+# macOS metadata
+.DS_Store
+._*
