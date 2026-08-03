@@ -6,6 +6,27 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Changed
+
+- Refined camera rotation, dragging, and zooming with bounded frame-based
+  damping, more stable interaction anchors, and more reliable pointer and
+  movement state transitions.
+- Consolidated root-transform matrix refreshes for loaded tile scenes into the
+  tiles renderer group update path.
+- Kept hidden inspected and globe tile GPU resources resident until normal
+  cache eviction instead of eagerly unloading them whenever visibility changes.
+- Increased the inspected tileset cache retention floor from 256 tiles and
+  0.2 GiB to 1,024 tiles and 0.5 GiB, and restored the renderer's default cache
+  unload pacing.
+- Removed the obsolete `accumExtSplats` Spark renderer option, which is no
+  longer supported by the Gaussian Splat plugin.
+
+### Fixed
+
+- Fixed short camera interactions and successive scroll inputs allowing the
+  pivot indicator to disappear before it could be seen by keeping it visible
+  for a minimum duration.
+
 ## [0.2.18] - 2026-07-16
 
 ### Fixed

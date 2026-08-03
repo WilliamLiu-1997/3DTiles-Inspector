@@ -510,11 +510,10 @@ function loadTileset(url, { frameOnLoad = true } = {}) {
   });
 
   const lruCache = next.lruCache;
-  lruCache.minSize = 256;
+  lruCache.minSize = 1024;
   lruCache.maxSize = 4096;
-  lruCache.minBytesSize = 0.2 * 2 ** 30;
+  lruCache.minBytesSize = 0.5 * 2 ** 30;
   lruCache.maxBytesSize = 2 * 2 ** 30;
-  lruCache.unloadPercent = 0.1;
 
   editableGroup.add(next.group);
 

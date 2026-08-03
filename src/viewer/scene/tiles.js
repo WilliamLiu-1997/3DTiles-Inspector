@@ -10,7 +10,6 @@ import {
   QuantizedMeshPlugin,
   TileCompressionPlugin,
   TilesFadePlugin,
-  UnloadTilesPlugin,
   XYZTilesOverlay,
 } from '3d-tiles-renderer/three/plugins';
 import { GaussianSplatPlugin } from '3d-tiles-rendererjs-3dgs-plugin';
@@ -49,7 +48,6 @@ function configureGlobeTilesResources(tiles) {
   lruCache.maxSize = 1024;
   lruCache.minBytesSize = 2 ** 30 / 8;
   lruCache.maxBytesSize = 2 ** 30 / 2;
-  lruCache.unloadPercent = 0.1;
 
   const downloadQueue = new PriorityQueue();
   downloadQueue.priorityCallback = tiles.downloadQueue.priorityCallback;
@@ -70,7 +68,6 @@ function configureGlobeTilesResources(tiles) {
 function configureGlobeTiles(next, { camera, preprocessURL, renderer }) {
   next.registerPlugin(new TilesFadePlugin());
   next.registerPlugin(new TileCompressionPlugin());
-  next.registerPlugin(new UnloadTilesPlugin());
   next.preprocessURL = preprocessURL;
   next.setCamera(camera);
   next.setResolutionFromRenderer(camera, renderer);
@@ -167,16 +164,12 @@ export function createInspectorTilesRenderer({
   tiles.parseQueue.maxJobs = 4;
   tiles.registerPlugin(new TilesFadePlugin());
   tiles.registerPlugin(new TileCompressionPlugin());
-  tiles.registerPlugin(new UnloadTilesPlugin());
   tiles.registerPlugin(new ImplicitTilingPlugin());
   tiles.registerPlugin(createGeometricErrorLayerScalePlugin(tilePreprocess));
   tiles.registerPlugin(
     new GaussianSplatPlugin({
       renderer,
       scene,
-      sparkRendererOptions: {
-        accumExtSplats: true,
-      },
     }),
   );
 
