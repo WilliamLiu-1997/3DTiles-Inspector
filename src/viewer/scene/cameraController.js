@@ -56,7 +56,7 @@ class PointerTracker {
   }
   setHoverEvent(e) {
     if (e.pointerType === 'mouse' || e.type === 'wheel') {
-      this.getAdjustedPointer(e, this.hoverPosition);
+      this.getClientPointer(e, this.hoverPosition);
       this.hoverSet = true;
     }
   }
@@ -71,18 +71,15 @@ class PointerTracker {
       return null;
     }
   }
-  // get the pointer position in the coordinate system of the target element
-  getAdjustedPointer(e, target) {
-    const domRef = e.target;
-    const rect = domRef.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    target.set(x, y);
+  // Keep pointer positions in viewport coordinates. mouseToCoords converts
+  // them to element-local NDC exactly once when a ray is needed.
+  getClientPointer(e, target) {
+    target.set(e.clientX, e.clientY);
   }
   addPointer(e) {
     const id = e.pointerId;
     const position = new Vector2();
-    this.getAdjustedPointer(e, position);
+    this.getClientPointer(e, position);
     if (this.pointerOrder.indexOf(id) === -1) {
       this.pointerOrder.push(id);
     }
@@ -99,7 +96,7 @@ class PointerTracker {
     if (!(id in this.pointerPositions)) {
       return false;
     }
-    this.getAdjustedPointer(e, this.pointerPositions[id]);
+    this.getClientPointer(e, this.pointerPositions[id]);
     return true;
   }
   deletePointer(e) {
@@ -395,6 +392,7 @@ class CameraController extends EventDispatcher {
   #dragAnchorPointerOffset;
   #dragPlaneNormal;
   #enabled;
+  #worldUp;
   #ellipsoid;
   #ellipsoidMaxRadius;
   #lastTime;
@@ -437,6 +435,9 @@ class CameraController extends EventDispatcher {
     this.#dragAnchorPointerOffset = new Vector2();
     this.#dragPlaneNormal = new Vector3();
     this.#enabled = false;
+    this.#worldUp = options.worldUp
+      ? new Vector3().copy(options.worldUp).normalize()
+      : null;
     this.#ellipsoid = null;
     this.#ellipsoidMaxRadius = 0;
     this.#lastTime = 0;
@@ -1084,7 +1085,7 @@ class CameraController extends EventDispatcher {
     this.#convergeCameraUp(keepCameraUpAnchor);
     const isCameraCenterMode = this.#isCameraCenterMode();
     const referenceUp = isCameraCenterMode
-      ? _worldZ
+      ? this.#getWorldUpDirection()
       : this.#getPositionUpDirection(this.#camera.position, _positionUp);
     // Modified globe drag already rotates around the Earth center. Preserving
     // an off-center anchor during a polar correction would translate the
@@ -1095,7 +1096,13 @@ class CameraController extends EventDispatcher {
     );
     this.#camera.updateMatrixWorld();
   }
+  #getWorldUpDirection() {
+    return this.#worldUp || _worldZ;
+  }
   #getPositionUpDirection(position, target) {
+    if (this.#worldUp) {
+      return target.copy(this.#worldUp);
+    }
     if (this.#ellipsoid) {
       this.#ellipsoid.getPositionToNormal(position, target);
       if (target.lengthSq() > THRESHOLD * THRESHOLD) {
@@ -1154,26 +1161,27 @@ class CameraController extends EventDispatcher {
     return verticalRange / this.#domElement.clientHeight;
   }
   #rotateNearAnchor(rotateVec) {
+    const worldUp = this.#getWorldUpDirection();
     const rotateAroundCamera = this.#rotatesAroundCamera();
     const rotationCenter = rotateAroundCamera
       ? this.#camera.position
       : this.#hit.point;
     const rotationDirection = rotateAroundCamera ? -1 : 1;
     this.#camera.getWorldDirection(_forward);
-    const cameraVerticalAngle = Math.PI - _forward.angleTo(_worldZ);
+    const cameraVerticalAngle = Math.PI - _forward.angleTo(worldUp);
     const verticalAngle = this.#clampVerticalDelta(
       rotateVec.y * rotationDirection,
       cameraVerticalAngle,
     );
     const horizontalAngle = rotateVec.x * rotationDirection;
-    _quaternion.setFromAxisAngle(_worldZ, horizontalAngle);
+    _quaternion.setFromAxisAngle(worldUp, horizontalAngle);
     this.#applyPivotRotation(_quaternion, rotateAroundCamera, rotationCenter);
     this.#camera.getWorldDirection(_forward);
     _up.copy(this.#camera.up).transformDirection(this.#camera.matrixWorld);
     _vec1.crossVectors(_forward, _up).normalize();
-    _right.copy(_vec1).projectOnPlane(_worldZ);
+    _right.copy(_vec1).projectOnPlane(worldUp);
     if (_right.lengthSq() <= THRESHOLD * THRESHOLD) {
-      _right.crossVectors(_forward, _worldZ);
+      _right.crossVectors(_forward, worldUp);
     }
     if (_right.lengthSq() <= THRESHOLD * THRESHOLD) {
       return 0;
@@ -1599,7 +1607,7 @@ class CameraController extends EventDispatcher {
     // Near the ellipsoid centre the surface normal is unstable, so fall back to
     // the world up direction.
     const referenceUp = this.#isCameraCenterMode()
-      ? _worldZ
+      ? this.#getWorldUpDirection()
       : this.#getPositionUpDirection(this.#camera.position, _positionUp);
     if (useExteriorZoomAlignment) {
       this.#alignCameraRollForExteriorZoom(referenceUp);

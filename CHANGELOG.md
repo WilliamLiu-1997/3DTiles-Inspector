@@ -6,6 +6,15 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+### Changed
+
+- Added configurable world-up handling to camera rotation and alignment.
+
+### Fixed
+
+- Fixed camera pointer coordinates being offset twice when the viewer element
+  does not start at the viewport origin.
+
 ## [0.2.19] - 2026-08-05
 
 ### Changed
