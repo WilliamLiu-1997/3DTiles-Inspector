@@ -6,6 +6,8 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.20] - 2026-08-05
+
 ### Changed
 
 - Added configurable world-up handling to camera rotation and alignment.
