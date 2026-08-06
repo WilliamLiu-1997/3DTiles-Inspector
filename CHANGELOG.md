@@ -6,6 +6,12 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.2.21] - 2026-08-06
+
+### Changed
+
+- Updated `3d-tiles-rendererjs-3dgs-plugin` from `0.1.15` to `0.1.16`.
+
 ## [0.2.20] - 2026-08-05
 
 ### Changed
