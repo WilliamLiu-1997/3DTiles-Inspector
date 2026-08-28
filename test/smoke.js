@@ -1363,7 +1363,6 @@ async function assertCropPreviewPreservesConfirmedHiddenOpacity(tempDir) {
     createSphereSelectionSdf,
     setScreenSelectionEditSelection,
   } = require(cropSdfBundlePath);
-  const { SplatEditRgbaBlendMode } = require('gaussian-splat-lite');
   const selection = {
     id: 1,
     sdfs: [
@@ -1377,11 +1376,11 @@ async function assertCropPreviewPreservesConfirmedHiddenOpacity(tempDir) {
   });
 
   setScreenSelectionEditSelection(edit, selection, 'include');
-  assert.strictEqual(edit.rgbaBlendMode, SplatEditRgbaBlendMode.MULTIPLY_RGBA);
+  assert.strictEqual(edit.rgbaBlendMode, 'multiply_rgba');
   assert.strictEqual(selection.sdfs[0].opacity, 0);
 
   setScreenSelectionEditSelection(edit, selection, 'preview');
-  assert.strictEqual(edit.rgbaBlendMode, SplatEditRgbaBlendMode.SET_RGBA);
+  assert.strictEqual(edit.rgbaBlendMode, 'set_rgba');
   assert.strictEqual(selection.sdfs[0].opacity, undefined);
 }
 
