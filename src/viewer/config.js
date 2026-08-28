@@ -34,6 +34,7 @@ export const BASIS_TRANSCODER_PATH = `${THREE_EXAMPLES_BASE_URL}libs/basis/`;
 export const CAMERA_CENTER_MODE_DISTANCE = 3000000;
 export const CAMERA_CENTER_MODE_DISTANCE_SQ =
   CAMERA_CENTER_MODE_DISTANCE ** 2;
+export const CAMERA_CENTER_MODE_FAR = 3000000;
 export const MOVE_TO_TILES_HEADING = 0;
 export const MOVE_TO_TILES_PITCH = MathUtils.degToRad(-30);
 export const MOVE_TO_TILES_ROLL = 0;

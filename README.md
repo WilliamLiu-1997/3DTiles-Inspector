@@ -19,6 +19,7 @@ Requires Node.js 18 or newer.
 This project is based on and integrates work from:
 
 - [WilliamLiu-1997/3D-Tiles-RendererJS-3DGS-Plugin](https://github.com/WilliamLiu-1997/3D-Tiles-RendererJS-3DGS-Plugin)
+- [WilliamLiu-1997/Gaussian-Splat-Lite](https://github.com/WilliamLiu-1997/Gaussian-Splat-Lite)
 - [NASA-AMMOS/3DTilesRendererJS](https://github.com/NASA-AMMOS/3DTilesRendererJS)
 
 ## Install
@@ -90,6 +91,7 @@ const {
 - `Move Tiles` to relocate the tileset root with an ENU-aligned transform
 - `Set Position` to click the globe, terrain, or loaded tiles and place the tileset there
 - `Terrain`, off by default, to toggle Cesium World Terrain after entering a Cesium ion token, while keeping satellite imagery
+- `Render on demand`, enabled by default, to pause canvas rendering while the scene is idle
 - `Geometric Error` scaling from `1/16x` to `16x`
 - `Layer Multiplier` scaling from `1/8x` to `8x` for each tile's geometric-error difference from the tileset's global leaf baseline
 - `Crop Regions` for drawing screen-space exclude regions or a crop sphere on 3D Gaussian Splat tilesets

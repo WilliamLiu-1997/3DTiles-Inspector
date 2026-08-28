@@ -1,5 +1,5 @@
-import { isGaussianSplatScene } from '3d-tiles-rendererjs-3dgs-plugin';
-import { forceOpaqueScene, normalizeLocalResourceUrl } from './utils.js';
+import { SplatMesh } from 'gaussian-splat-lite';
+import { forceOpaqueMaterial, normalizeLocalResourceUrl } from './utils.js';
 import { postSaveTransform } from './io/saveTransformRequest.js';
 import {
   parseCoordinateInputs as parseCoordinateInputValues,
@@ -7,13 +7,18 @@ import {
 } from './dom/coordinateInputs.js';
 import { createRuntimeStats } from './dom/runtimeStats.js';
 import { createStatusPanel } from './dom/statusPanel.js';
+import { createThemeController } from './dom/theme.js';
 import { createViewerToggles } from './dom/viewerToggles.js';
 import { createGeoCameraController } from './transform/geoCamera.js';
 import { createGeometricErrorController } from './transform/geometricError.js';
 import { createUniformScaleController } from './transform/uniformScale.js';
 import { createGlobeController } from './scene/globeController.js';
+import { createRenderLoop } from './scene/renderLoop.js';
 import { createViewerScene } from './scene/sceneSetup.js';
 import { createViewerTransformControls } from './scene/transformControls.js';
+import {
+  createCameraMovementTileQueueController,
+} from './scene/cameraMovementTileQueues.js';
 import { bindViewerEvents } from './dom/events.js';
 import { createViewerShutdownRequester } from './io/shutdown.js';
 import { createSetPositionController } from './io/setPositionController.js';
@@ -21,6 +26,7 @@ import { createFlyToController } from './navigation/flyTo.js';
 import { createCameraUrlPoseController } from './navigation/cameraUrlPose.js';
 import { createCropController } from './screenSelection/cropController.js';
 import { createRootTransformController } from './transform/rootTransformController.js';
+import { markWorldMatricesDirty } from './transform/tilesetTransform.js';
 import { createTransformModeController } from './transform/transformModeController.js';
 import {
   DEFAULT_ERROR_TARGET,
@@ -29,6 +35,7 @@ import {
 import {
   BASIS_TRANSCODER_PATH,
   CAMERA_CENTER_MODE_DISTANCE_SQ,
+  CAMERA_CENTER_MODE_FAR,
   DRACO_DECODER_PATH,
   MOVE_TO_COORDINATE_RADIUS,
   MOVE_TO_TILES_HEADING,
@@ -52,9 +59,11 @@ const {
   geometricErrorLayerValueEl,
   geometricErrorScaleInput,
   geometricErrorValueEl,
+  fpsValueEl,
   heightInput,
   latitudeInput,
   longitudeInput,
+  renderOnDemandToggle,
   rotateButton,
   saveButton,
   saveProgressEl,
@@ -65,17 +74,39 @@ const {
   splatsCountValueEl,
   statusEl,
   terrainButton,
+  themeToggle,
   tilesDownloadingValueEl,
   tilesLoadedValueEl,
   tilesParsingValueEl,
   tilesVisibleValueEl,
   toolbarDockEl,
   toolbarEl,
+  toolbarScrollEl,
   toolbarToggleButton,
   translateButton,
   uniformScaleTrackEl,
   uniformScaleValueInput,
 } = viewerElements;
+
+function syncToolbarScrollbarGutter() {
+  if (!toolbarScrollEl) {
+    return;
+  }
+
+  const scrollbarGutter = Math.max(
+    0,
+    toolbarScrollEl.offsetWidth - toolbarScrollEl.clientWidth,
+  );
+  toolbarScrollEl.style.setProperty(
+    '--toolbar-scrollbar-gutter',
+    `${scrollbarGutter}px`,
+  );
+}
+
+syncToolbarScrollbarGutter();
+if (toolbarScrollEl && typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(syncToolbarScrollbarGutter).observe(toolbarScrollEl);
+}
 
 const MOVE_TO_TILES_POSE = {
   heading: MOVE_TO_TILES_HEADING,
@@ -91,6 +122,12 @@ const { handleSaveProgress, setSaveProgress, setStatus } = createStatusPanel({
 });
 
 const requestViewerShutdown = createViewerShutdownRequester(SHUTDOWN_URL);
+
+let renderLoop = null;
+
+function requestRender() {
+  renderLoop?.requestRender();
+}
 
 function parseCoordinateInputs() {
   return parseCoordinateInputValues({
@@ -113,6 +150,7 @@ const {
   cameraController,
   dracoLoader,
   editableGroup,
+  gaussianSplatRenderer,
   globeGroup,
   ktx2Loader,
   renderer,
@@ -124,9 +162,55 @@ const {
   basisTranscoderPath: BASIS_TRANSCODER_PATH,
   container: document.getElementById('app'),
   dracoDecoderPath: DRACO_DECODER_PATH,
+  onRenderDirty: requestRender,
+});
+
+const cameraExteriorModeFar = camera.far;
+
+function updateCameraFarForMode() {
+  const nextFar =
+    camera.position.lengthSq() <= CAMERA_CENTER_MODE_DISTANCE_SQ
+      ? CAMERA_CENTER_MODE_FAR
+      : cameraExteriorModeFar;
+  if (camera.far !== nextFar) {
+    camera.far = nextFar;
+    camera.updateProjectionMatrix();
+  }
+}
+
+createThemeController({
+  onThemeChanged: requestRender,
+  scene,
+  themeToggle,
 });
 
 let tiles = null;
+let globeTiles = null;
+const observedTilesRenderers = new Set();
+
+function observeTilesRenderer(next) {
+  if (!next || observedTilesRenderers.has(next)) {
+    return;
+  }
+
+  observedTilesRenderers.add(next);
+  next.addEventListener('needs-render', requestRender);
+  next.addEventListener('needs-update', requestRender);
+  requestRender();
+}
+
+function unobserveTilesRenderer(current) {
+  if (!current || !observedTilesRenderers.delete(current)) {
+    return;
+  }
+
+  current.removeEventListener('needs-render', requestRender);
+  current.removeEventListener('needs-update', requestRender);
+}
+
+const cameraMovementTileQueues = createCameraMovementTileQueueController({
+  cameraController,
+});
 
 function getActiveEllipsoid() {
   return tiles?.ellipsoid || globeController.getEllipsoid();
@@ -135,7 +219,10 @@ function getActiveEllipsoid() {
 const globeController = createGlobeController({
   camera,
   globeGroup,
-  onTilesChanged: () => {
+  onTilesChanged: (next) => {
+    unobserveTilesRenderer(globeTiles);
+    globeTiles = next;
+    observeTilesRenderer(next);
     cameraController.setEllipsoid(getActiveEllipsoid());
   },
   renderer,
@@ -241,12 +328,15 @@ const { transformControls, transformControlsHelper } =
     },
     getSyncingTransformHandle: () => rootTransform?.isSyncingHandle() ?? false,
   });
+transformControls.addEventListener('change', requestRender);
 
 let tilesetHasGaussianSplats = false;
+const gaussianSplatWorldMatrixNodes = new WeakMap();
 
 const runtimeStats = createRuntimeStats({
   cacheBytesValueEl,
-  getScene: () => scene,
+  fpsValueEl,
+  getGaussianSplatRenderer: () => gaussianSplatRenderer,
   getTiles: () => tiles,
   hasGaussianSplats: () => tilesetHasGaussianSplats,
   splatsCountValueEl,
@@ -296,6 +386,7 @@ const flyTo = createFlyToController({
   globeController,
   moveToTilesPose: MOVE_TO_TILES_POSE,
   moveToCoordinateRadius: MOVE_TO_COORDINATE_RADIUS,
+  requestRender,
   setStatus,
   applyTilesPlacementFromCoordinate: (lat, lon, h) =>
     rootTransform.applyFromCoordinate(lat, lon, h),
@@ -346,6 +437,7 @@ cropController = createCropController({
   scene,
   screenSelectionSplatEdit,
   reversedDepthBuffer: renderer.capabilities.reversedDepthBuffer,
+  onSceneChanged: requestRender,
   setStatus,
   setTransformMode: (mode) => transformModeController.setMode(mode),
   syncTransformControlsState: () => transformModeController.syncControls(),
@@ -376,7 +468,6 @@ transformModeController = createTransformModeController({
 rootTransform = createRootTransformController({
   editableGroup,
   geoCamera,
-  getTiles: () => tiles,
   rootTilesetLabel: ROOT_TILESET_LABEL,
   transformControlsHelper,
   transformHandle,
@@ -411,6 +502,33 @@ function markTilesetHasGaussianSplats() {
   setGaussianSplatUiVisible(true);
   cropController.setHasGaussianSplats(true);
   runtimeStats.update(true);
+}
+
+function inspectLoadedTileScene(root) {
+  const opaqueMaterials = new Set();
+  const worldMatrixNodes = new Set();
+  root.traverse((object) => {
+    const material = object.material;
+    if (Array.isArray(material)) {
+      material.forEach((entry) => opaqueMaterials.add(entry));
+    } else if (material) {
+      opaqueMaterials.add(material);
+    }
+
+    if (!(object instanceof SplatMesh)) {
+      return;
+    }
+
+    let current = object;
+    while (current) {
+      worldMatrixNodes.add(current);
+      if (current === root) {
+        break;
+      }
+      current = current.parent;
+    }
+  });
+  return { opaqueMaterials, worldMatrixNodes };
 }
 
 function cancelPositionPickModes() {
@@ -472,6 +590,8 @@ function resetToSaved() {
 
 function loadTileset(url, { frameOnLoad = true } = {}) {
   if (tiles) {
+    cameraMovementTileQueues.setTiles(null);
+    unobserveTilesRenderer(tiles);
     editableGroup.remove(tiles.group);
     tiles.dispose();
     tiles = null;
@@ -490,24 +610,39 @@ function loadTileset(url, { frameOnLoad = true } = {}) {
     ktxLoader: ktx2Loader,
     preprocessURL: normalizeLocalResourceUrl,
     renderer,
-    scene,
     showBoundingVolume,
     tilePreprocess: geometricError.applyLayerScaleToTile,
     url,
   });
   tiles = next;
+  observeTilesRenderer(next);
+  cameraMovementTileQueues.setTiles(next);
   viewerToggles.setBoundingVolumePlugin(debugTilesPlugin);
   geometricError.updateTilesetErrorTarget();
   next.addEventListener('load-model', ({ scene: modelScene }) => {
-    forceOpaqueScene(modelScene);
-    if (isGaussianSplatScene(modelScene)) {
+    const { opaqueMaterials, worldMatrixNodes } =
+      inspectLoadedTileScene(modelScene);
+    if (worldMatrixNodes.size > 0) {
+      gaussianSplatWorldMatrixNodes.set(modelScene, worldMatrixNodes);
       markTilesetHasGaussianSplats();
+    } else {
+      opaqueMaterials.forEach(forceOpaqueMaterial);
     }
-    rootTransform.markDirty();
   });
-  next.addEventListener('tile-visibility-change', () => {
-    rootTransform.markDirty();
-  });
+  next.addEventListener(
+    'tile-visibility-change',
+    ({ scene: modelScene, visible }) => {
+      if (!visible || !modelScene?.parent) {
+        return;
+      }
+      const worldMatrixNodes = gaussianSplatWorldMatrixNodes.get(modelScene);
+      if (worldMatrixNodes) {
+        // TilesGroup skips clean children after reparenting. GSL already updates
+        // each SplatMesh every frame, so dirty only its cached ancestor paths.
+        markWorldMatricesDirty(worldMatrixNodes);
+      }
+    },
+  );
 
   const lruCache = next.lruCache;
   lruCache.minSize = 1024;
@@ -617,6 +752,38 @@ async function saveTransform() {
   }
 }
 
+function renderFrame(time = performance.now()) {
+  cameraController.update(time);
+  const cameraFlightActive = flyTo.update(time);
+  cameraUrlPose.update(time);
+  updateCameraFarForMode();
+  globeController.update();
+  tiles?.update();
+  renderer.render(scene, camera);
+  runtimeStats.recordRenderedFrame(time);
+  runtimeStats.update();
+  return cameraFlightActive;
+}
+
+renderLoop = createRenderLoop({
+  onFrame: renderFrame,
+  onIdle: runtimeStats.markRenderIdle,
+  renderOnDemand: true,
+});
+renderOnDemandToggle.checked = renderLoop.isRenderOnDemand();
+cameraController.addEventListener('update', requestRender);
+
+function setRenderOnDemand(enabled) {
+  const next = !!enabled;
+  renderOnDemandToggle.checked = next;
+  renderLoop.setRenderOnDemand(next);
+  setStatus(
+    next
+      ? 'Render on demand enabled. The canvas pauses when the scene is idle.'
+      : 'Render on demand disabled. Continuous rendering resumed.',
+  );
+}
+
 bindViewerEvents({
   camera,
   cameraController,
@@ -627,6 +794,7 @@ bindViewerEvents({
   getGlobeTiles: () => globeController.getTiles(),
   getTerrainEnabled: () => globeController.isTerrainEnabled(),
   getTiles: () => tiles,
+  gaussianSplatRenderer,
   handlers: {
     cancelCropScreenSelection: cropController.cancel,
     beginKeepSphereRadiusTrackDrag:
@@ -636,6 +804,7 @@ bindViewerEvents({
     confirmCropScreenSelection: cropController.confirm,
     confirmKeepSphere: cropController.confirmKeepSphere,
     createKeepSphere: cropController.createKeepSphere,
+    disposeRenderLoop: renderLoop.dispose,
     endKeepSphereRadiusTrackDrag:
       cropController.endKeepSphereRadiusTrackDrag,
     handleScreenSelectionPointerCancel: cropController.handlePointerCancel,
@@ -649,6 +818,7 @@ bindViewerEvents({
     moveCameraToCoordinate,
     moveCameraToTiles,
     moveTilesToCoordinate,
+    requestRender,
     requestViewerShutdown,
     resetToSaved,
     saveTransform,
@@ -656,6 +826,7 @@ bindViewerEvents({
     setKeepSphereRadiusFromTrackClientX:
       cropController.setKeepSphereRadiusFromTrackClientX,
     setKeepSphereSizeValue: cropController.setKeepSphereSizeValue,
+    setRenderOnDemand,
     setTerrainEnabled: viewerToggles.setTerrainEnabled,
     toggleBoundingVolume: viewerToggles.toggleBoundingVolume,
     toggleCropScreenSelectionMode: cropController.toggle,
@@ -679,17 +850,4 @@ window.addEventListener('pagehide', cameraUrlPose.flush);
 cameraController.addEventListener('finish', cameraUrlPose.flush);
 
 loadTileset(TILESET_URL, { frameOnLoad: !appliedInitialCameraPose });
-
-function frame() {
-  cameraController.update();
-  flyTo.update();
-  cameraUrlPose.update();
-  rootTransform.flush();
-  globeController.update();
-  tiles?.update();
-  renderer.render(scene, camera);
-  runtimeStats.update();
-  requestAnimationFrame(frame);
-}
-
-frame();
+requestRender();

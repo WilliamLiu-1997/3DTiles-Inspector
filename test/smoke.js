@@ -1346,6 +1346,45 @@ async function assertDepthAwareRenderOrder(tempDir) {
   }
 }
 
+async function assertCropPreviewPreservesConfirmedHiddenOpacity(tempDir) {
+  const cropSdfBundlePath = path.join(tempDir, 'crop-sdf.cjs');
+  await esbuild.build({
+    bundle: true,
+    entryPoints: [
+      path.join(__dirname, '../src/viewer/screenSelection/sdf.js'),
+    ],
+    format: 'cjs',
+    logLevel: 'silent',
+    outfile: cropSdfBundlePath,
+    platform: 'node',
+  });
+  const {
+    createScreenSelectionEdit,
+    createSphereSelectionSdf,
+    setScreenSelectionEditSelection,
+  } = require(cropSdfBundlePath);
+  const { SplatEditRgbaBlendMode } = require('gaussian-splat-lite');
+  const selection = {
+    id: 1,
+    sdfs: [
+      createSphereSelectionSdf({ worldCenter: [0, 0, 0], worldRadius: 1 }),
+    ],
+    type: 'sphere',
+  };
+  const edit = createScreenSelectionEdit({
+    name: 'Crop preview opacity test',
+    style: 'include',
+  });
+
+  setScreenSelectionEditSelection(edit, selection, 'include');
+  assert.strictEqual(edit.rgbaBlendMode, SplatEditRgbaBlendMode.MULTIPLY_RGBA);
+  assert.strictEqual(selection.sdfs[0].opacity, 0);
+
+  setScreenSelectionEditSelection(edit, selection, 'preview');
+  assert.strictEqual(edit.rgbaBlendMode, SplatEditRgbaBlendMode.SET_RGBA);
+  assert.strictEqual(selection.sdfs[0].opacity, undefined);
+}
+
 async function assertLoadedTileSceneMatricesRefresh(tempDir) {
   const tilesetTransformBundlePath = path.join(
     tempDir,
@@ -1362,48 +1401,250 @@ async function assertLoadedTileSceneMatricesRefresh(tempDir) {
     outfile: tilesetTransformBundlePath,
     platform: 'node',
   });
-  const { updateTilesRendererGroupMatrices } = require(
-    tilesetTransformBundlePath
+  const {
+    getObjectMatrix,
+    getRootTransform,
+    markWorldMatricesDirty,
+  } = require(tilesetTransformBundlePath);
+  const { Group, Matrix4 } = require('three');
+  const { TilesGroup } = await import(
+    pathToFileURL(
+      path.join(
+        __dirname,
+        '../node_modules/3d-tiles-renderer/src/three/renderer/tiles/TilesGroup.js',
+      ),
+    ).href
   );
-  const { Group } = require('three');
-  const tilesGroup = new Group();
+  const tilesRenderer = {
+    activeTiles: new Set(),
+    visibleTiles: new Set(),
+    raycast() {},
+  };
+  const editableGroup = new Group();
+  const tilesGroup = new TilesGroup(tilesRenderer);
   const loadedScene = new Group();
   const loadedChild = new Group();
+  const detachedScene = new Group();
+  const detachedChild = new Group();
 
+  editableGroup.add(tilesGroup);
   tilesGroup.add(loadedScene);
   loadedScene.add(loadedChild);
-  loadedScene.matrixAutoUpdate = false;
+  detachedScene.add(detachedChild);
   loadedChild.matrixAutoUpdate = false;
-  loadedScene.matrix.makeTranslation(2, 0, 0);
-  loadedChild.matrix.makeTranslation(3, 0, 0);
-  tilesGroup.matrixWorld.makeTranslation(10, 0, 0);
-  loadedScene.matrixWorld.multiplyMatrices(
-    tilesGroup.matrixWorld,
-    loadedScene.matrix,
-  );
-  loadedChild.matrixWorld.multiplyMatrices(
-    loadedScene.matrixWorld,
-    loadedChild.matrix,
-  );
-  loadedScene.matrixWorldNeedsUpdate = false;
-  loadedChild.matrixWorldNeedsUpdate = false;
+  detachedScene.matrixAutoUpdate = false;
+  detachedChild.matrixAutoUpdate = false;
+  loadedScene.position.set(10, 0, 0);
+  loadedChild.matrix.makeTranslation(2, 0, 0);
+  detachedScene.matrix.makeTranslation(7, 0, 0);
+  detachedChild.matrix.makeTranslation(11, 0, 0);
+  detachedScene.matrixWorld.makeTranslation(70, 0, 0);
+  detachedChild.matrixWorld.makeTranslation(81, 0, 0);
+  detachedScene.matrixWorldNeedsUpdate = false;
+  detachedChild.matrixWorldNeedsUpdate = false;
 
-  tilesGroup.matrixWorld.makeTranslation(20, 0, 0);
-  let groupMatrixUpdated = false;
-  updateTilesRendererGroupMatrices({
-    group: {
-      updateMatrixWorld(force) {
-        groupMatrixUpdated = force;
-      },
+  editableGroup.scale.setScalar(2);
+  editableGroup.updateMatrixWorld(true);
+  assert.strictEqual(loadedScene.matrixWorld.elements[12], 20);
+  assert.strictEqual(loadedChild.matrixWorld.elements[12], 24);
+
+  editableGroup.scale.setScalar(3);
+  editableGroup.updateMatrixWorld(true);
+  assert.strictEqual(loadedScene.matrixWorld.elements[12], 30);
+  assert.strictEqual(loadedChild.matrixWorld.elements[12], 36);
+  assert.strictEqual(detachedScene.matrixWorld.elements[12], 70);
+  assert.strictEqual(detachedChild.matrixWorld.elements[12], 81);
+
+  tilesGroup.add(detachedScene);
+  markWorldMatricesDirty([detachedScene, detachedChild]);
+  // Mirrors SplatMesh.frameUpdate(): update ancestors and the static splat only.
+  detachedChild.updateWorldMatrix(true, false);
+  assert.strictEqual(detachedScene.matrixWorld.elements[12], 21);
+  assert.strictEqual(detachedChild.matrixWorld.elements[12], 54);
+
+  const transformReadGroup = new Group();
+  let transformReadWorldUpdates = 0;
+  transformReadGroup.matrix.makeScale(4, 4, 4);
+  transformReadGroup.updateMatrixWorld = () => {
+    transformReadWorldUpdates += 1;
+  };
+  assert.strictEqual(getObjectMatrix(transformReadGroup).elements[0], 4);
+  assert.strictEqual(
+    getRootTransform({
+      editableGroup: transformReadGroup,
+      lastSavedMatrix: new Matrix4(),
+      savedRootInverseMatrix: new Matrix4(),
+      savedRootMatrix: new Matrix4(),
+      target: new Matrix4(),
+    }).elements[0],
+    4,
+  );
+  assert.strictEqual(transformReadWorldUpdates, 0);
+}
+
+async function assertRenderLoopSupportsOnDemandMode(tempDir) {
+  const bundlePath = path.join(tempDir, 'render-loop.cjs');
+  await esbuild.build({
+    bundle: true,
+    entryPoints: [
+      path.join(__dirname, '../src/viewer/scene/renderLoop.js'),
+    ],
+    format: 'cjs',
+    logLevel: 'silent',
+    outfile: bundlePath,
+    platform: 'node',
+  });
+  const { createRenderLoop } = require(bundlePath);
+  const pendingFrames = new Map();
+  const cancelledFrames = [];
+  let nextFrameHandle = 1;
+  let animationActive = false;
+  let idleCalls = 0;
+  let requestDuringFrame = false;
+  let renderedFrames = 0;
+  let renderLoop;
+  renderLoop = createRenderLoop({
+    cancelAnimationFrame(handle) {
+      cancelledFrames.push(handle);
+      pendingFrames.delete(handle);
     },
-    forEachLoadedModel(callback) {
-      callback(loadedScene);
+    onFrame() {
+      renderedFrames += 1;
+      if (requestDuringFrame) {
+        renderLoop.requestRender();
+      }
+      return animationActive;
+    },
+    onIdle() {
+      idleCalls += 1;
+    },
+    requestAnimationFrame(callback) {
+      const handle = nextFrameHandle++;
+      pendingFrames.set(handle, callback);
+      return handle;
     },
   });
+  const runNextFrame = () => {
+    const [entry] = pendingFrames.entries();
+    assert.ok(entry, 'expected a pending render frame');
+    pendingFrames.delete(entry[0]);
+    entry[1](renderedFrames * 16);
+  };
 
-  assert.strictEqual(groupMatrixUpdated, true);
-  assert.strictEqual(loadedScene.matrixWorld.elements[12], 22);
-  assert.strictEqual(loadedChild.matrixWorld.elements[12], 25);
+  assert.strictEqual(renderLoop.isRenderOnDemand(), false);
+  assert.strictEqual(renderLoop.requestRender(), true);
+  assert.strictEqual(renderLoop.requestRender(), false);
+  runNextFrame();
+  assert.strictEqual(renderedFrames, 1);
+  assert.strictEqual(idleCalls, 0);
+  assert.strictEqual(pendingFrames.size, 1);
+
+  renderLoop.setRenderOnDemand(true);
+  assert.strictEqual(renderLoop.isRenderOnDemand(), true);
+  runNextFrame();
+  assert.strictEqual(renderedFrames, 2);
+  assert.strictEqual(idleCalls, 1);
+  assert.strictEqual(pendingFrames.size, 0);
+
+  requestDuringFrame = true;
+  assert.strictEqual(renderLoop.requestRender(), true);
+  runNextFrame();
+  assert.strictEqual(idleCalls, 1);
+  assert.strictEqual(pendingFrames.size, 1);
+  requestDuringFrame = false;
+  runNextFrame();
+  assert.strictEqual(idleCalls, 2);
+  assert.strictEqual(pendingFrames.size, 0);
+
+  assert.strictEqual(renderLoop.requestRender(), true);
+  animationActive = true;
+  runNextFrame();
+  assert.strictEqual(idleCalls, 2);
+  assert.strictEqual(pendingFrames.size, 1);
+  animationActive = false;
+  runNextFrame();
+  assert.strictEqual(renderedFrames, 6);
+  assert.strictEqual(idleCalls, 3);
+  assert.strictEqual(pendingFrames.size, 0);
+
+  renderLoop.setRenderOnDemand(false);
+  assert.strictEqual(pendingFrames.size, 1);
+  renderLoop.dispose();
+  assert.deepStrictEqual(cancelledFrames, [nextFrameHandle - 1]);
+  assert.strictEqual(pendingFrames.size, 0);
+  assert.strictEqual(renderLoop.requestRender(), false);
+}
+
+async function assertCameraMovementLimitsTileQueues(tempDir) {
+  const bundlePath = path.join(tempDir, 'camera-movement-tile-queues.cjs');
+  await esbuild.build({
+    bundle: true,
+    entryPoints: [
+      path.join(
+        __dirname,
+        '../src/viewer/scene/cameraMovementTileQueues.js',
+      ),
+    ],
+    format: 'cjs',
+    logLevel: 'silent',
+    outfile: bundlePath,
+    platform: 'node',
+  });
+  const {
+    CAMERA_MOVEMENT_QUEUE_MAX_JOBS,
+    CAMERA_MOVEMENT_QUEUE_RESTORE_DELAY_MS,
+    createCameraMovementTileQueueController,
+  } = require(bundlePath);
+  const listeners = new Map();
+  const cameraController = {
+    addEventListener(type, listener) {
+      listeners.set(type, listener);
+    },
+    removeEventListener(type, listener) {
+      if (listeners.get(type) === listener) {
+        listeners.delete(type);
+      }
+    },
+  };
+  const dispatch = (type) => listeners.get(type)?.();
+  const firstTiles = {
+    downloadQueue: { maxJobs: 8 },
+    parseQueue: { maxJobs: 4 },
+  };
+  const secondTiles = {
+    downloadQueue: { maxJobs: 6 },
+    parseQueue: { maxJobs: 3 },
+  };
+  const queueController = createCameraMovementTileQueueController({
+    cameraController,
+    restoreDelayMs: 10,
+  });
+
+  assert.strictEqual(CAMERA_MOVEMENT_QUEUE_MAX_JOBS, 2);
+  assert.strictEqual(CAMERA_MOVEMENT_QUEUE_RESTORE_DELAY_MS, 250);
+  queueController.setTiles(firstTiles);
+  dispatch('start');
+  assert.strictEqual(firstTiles.downloadQueue.maxJobs, 2);
+  assert.strictEqual(firstTiles.parseQueue.maxJobs, 2);
+
+  dispatch('finish');
+  dispatch('start');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.strictEqual(firstTiles.downloadQueue.maxJobs, 2);
+  assert.strictEqual(firstTiles.parseQueue.maxJobs, 2);
+
+  queueController.setTiles(secondTiles);
+  assert.strictEqual(firstTiles.downloadQueue.maxJobs, 8);
+  assert.strictEqual(firstTiles.parseQueue.maxJobs, 4);
+  assert.strictEqual(secondTiles.downloadQueue.maxJobs, 2);
+  assert.strictEqual(secondTiles.parseQueue.maxJobs, 2);
+
+  dispatch('finish');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.strictEqual(secondTiles.downloadQueue.maxJobs, 6);
+  assert.strictEqual(secondTiles.parseQueue.maxJobs, 3);
+  queueController.dispose();
+  assert.strictEqual(listeners.size, 0);
 }
 
 async function main() {
@@ -1424,8 +1665,11 @@ async function main() {
   );
 
   try {
+    await assertCameraMovementLimitsTileQueues(tempDir);
     await assertDepthAwareRenderOrder(tempDir);
+    await assertCropPreviewPreservesConfirmedHiddenOpacity(tempDir);
     await assertLoadedTileSceneMatricesRefresh(tempDir);
+    await assertRenderLoopSupportsOnDemandMode(tempDir);
     await assertAtomicWriteRetriesLockedTarget(tempDir);
     await assertScaleSaveScalesGeometricErrors(tempDir);
 

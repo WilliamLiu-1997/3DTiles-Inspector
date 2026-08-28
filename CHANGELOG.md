@@ -6,6 +6,35 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-28
+
+### Added
+
+- Added a persistent light/dark theme switch and refreshed the viewer styling.
+- Added an FPS counter to the runtime statistics overlay.
+- Added a default-enabled `Render on demand` canvas option that pauses idle
+  rendering and resumes for interaction, animation, tile updates, and
+  Gaussian Splat work.
+
+### Changed
+
+- Updated `3d-tiles-rendererjs-3dgs-plugin` to `0.2.1` and replaced Spark
+  with `gaussian-splat-lite` for rendering, raycasting, crop previews, and
+  runtime splat statistics.
+- Changed the perspective camera to a 45-degree field of view, a `0.25` near
+  plane, and a `20,000,000` exterior far plane; the far plane now switches to
+  `3,000,000` in Earth-center mode.
+- Reduced the inspected tileset download concurrency from eight to four jobs.
+- Limited inspected tileset download and parsing concurrency to two jobs while
+  the camera is moving and until 250 ms after movement finishes.
+- Optimized Gaussian Splat transform updates by invalidating only affected
+  world-matrix paths instead of refreshing every loaded tile scene.
+
+### Fixed
+
+- Fixed active crop previews making splats hidden by confirmed crop regions
+  visible again.
+
 ## [0.2.21] - 2026-08-06
 
 ### Changed

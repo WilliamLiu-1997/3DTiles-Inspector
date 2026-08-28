@@ -1,5 +1,6 @@
 export function getViewerElements() {
   const toolbarEl = document.getElementById('toolbar');
+  const toolbarScrollEl = toolbarEl.querySelector('.toolbar-scroll');
 
   return {
     boundingVolumeButton: document.getElementById('bounding-volume'),
@@ -27,6 +28,7 @@ export function getViewerElements() {
     ),
     geometricErrorScaleInput: document.getElementById('geometric-error-scale'),
     geometricErrorValueEl: document.getElementById('geometric-error-value'),
+    fpsValueEl: document.getElementById('fps-value'),
     heightInput: document.getElementById('height'),
     latitudeInput: document.getElementById('latitude'),
     longitudeInput: document.getElementById('longitude'),
@@ -37,6 +39,7 @@ export function getViewerElements() {
       'move-tiles-to-coordinate',
     ),
     moveToTilesButton: document.getElementById('move-to-tiles'),
+    renderOnDemandToggle: document.getElementById('render-on-demand'),
     resetButton: document.getElementById('reset'),
     rotateButton: document.getElementById('rotate'),
     saveButton: document.getElementById('save'),
@@ -50,12 +53,14 @@ export function getViewerElements() {
     splatsCountValueEl: document.getElementById('splats-count-value'),
     statusEl: document.getElementById('status'),
     terrainButton: document.getElementById('terrain'),
+    themeToggle: document.getElementById('theme'),
     tilesDownloadingValueEl: document.getElementById('tiles-downloading-value'),
     tilesLoadedValueEl: document.getElementById('tiles-loaded-value'),
     tilesParsingValueEl: document.getElementById('tiles-parsing-value'),
     tilesVisibleValueEl: document.getElementById('tiles-visible-value'),
     toolbarDockEl: toolbarEl.parentElement,
     toolbarEl,
+    toolbarScrollEl,
     toolbarToggleButton: document.getElementById('toolbar-toggle'),
     translateButton: document.getElementById('translate'),
     uniformScaleTrackEl: document.getElementById('uniform-scale'),

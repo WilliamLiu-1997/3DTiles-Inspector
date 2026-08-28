@@ -6,7 +6,11 @@ import {
   Scene,
   WebGLRenderer,
 } from 'three';
-import { SplatEdit, SplatEditRgbaBlendMode } from '@sparkjsdev/spark';
+import {
+  GaussianSplatRenderer,
+  SplatEdit,
+  SplatEditRgbaBlendMode,
+} from 'gaussian-splat-lite';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { CameraController } from './cameraController.js';
@@ -15,6 +19,7 @@ export function createViewerScene({
   basisTranscoderPath,
   container,
   dracoDecoderPath,
+  onRenderDirty,
 }) {
   const renderer = new WebGLRenderer({
     antialias: false,
@@ -36,15 +41,21 @@ export function createViewerScene({
   const scene = new Scene();
   scene.background = new Color(0xeeeeee);
 
+  const gaussianSplatRenderer = new GaussianSplatRenderer({
+    onDirty: onRenderDirty,
+    renderer,
+  });
+  scene.add(gaussianSplatRenderer);
+
   const terrainLight = new AmbientLight(0xffffff, Math.PI);
   terrainLight.visible = false;
   scene.add(terrainLight);
 
   const camera = new PerspectiveCamera(
-    60,
+    45,
     window.innerWidth / window.innerHeight,
-    1,
-    1.2e7,
+    0.25,
+    2e7,
   );
   camera.position.set(0, 0, 1.2e7);
   camera.updateMatrixWorld(true);
@@ -63,7 +74,7 @@ export function createViewerScene({
 
   const screenSelectionSplatEdit = new SplatEdit({
     name: 'Screen Selection Preview',
-    rgbaBlendMode: SplatEditRgbaBlendMode.SET_RGB,
+    rgbaBlendMode: SplatEditRgbaBlendMode.SET_RGBA,
     sdfSmooth: 0,
     softEdge: 0,
     invert: false,
@@ -75,6 +86,7 @@ export function createViewerScene({
     cameraController: new CameraController(renderer, contentGroup, camera),
     dracoLoader,
     editableGroup,
+    gaussianSplatRenderer,
     globeGroup,
     ktx2Loader,
     renderer,

@@ -14,6 +14,7 @@ export function createFlyToController({
   globeController,
   moveToTilesPose,
   moveToCoordinateRadius,
+  requestRender,
   setStatus,
   applyTilesPlacementFromCoordinate,
   getTiles,
@@ -97,6 +98,7 @@ export function createFlyToController({
     }
 
     setStatus(activeStatus);
+    requestRender?.();
   }
 
   function startBoundingSphereFlight(

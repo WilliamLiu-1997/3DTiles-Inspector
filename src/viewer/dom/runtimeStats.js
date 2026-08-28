@@ -1,7 +1,8 @@
-import { isGaussianSplatScene } from '3d-tiles-rendererjs-3dgs-plugin';
+import { SplatMesh } from 'gaussian-splat-lite';
 import { formatBytes, formatInteger } from '../utils.js';
 
 const RUNTIME_STATS_UPDATE_INTERVAL_MS = 250;
+const FPS_UPDATE_INTERVAL_MS = 500;
 
 function getGaussianMeshSplatCount(mesh) {
   if (!mesh || typeof mesh !== 'object') {
@@ -9,11 +10,7 @@ function getGaussianMeshSplatCount(mesh) {
   }
 
   const directCount =
-    mesh.extSplats?.getNumSplats?.() ??
-    mesh.extSplats?.numSplats ??
-    mesh.packedSplats?.getNumSplats?.() ??
-    mesh.packedSplats?.numSplats ??
-    mesh.splats?.getNumSplats?.();
+    mesh.numSplats ?? mesh.splats?.getNumSplats?.();
 
   return Number.isFinite(directCount) ? directCount : 0;
 }
@@ -25,43 +22,29 @@ function getLoadedGaussianSplatCount(tiles) {
 
   let total = 0;
   tiles.forEachLoadedModel((loadedScene) => {
-    if (!loadedScene?.visible || !isGaussianSplatScene(loadedScene)) {
+    if (!loadedScene?.visible) {
       return;
     }
 
-    const meshes = loadedScene.userData.gaussianSplatMeshes || [];
-    for (const mesh of meshes) {
-      total += getGaussianMeshSplatCount(mesh);
-    }
+    loadedScene.traverse((object) => {
+      if (object instanceof SplatMesh && object.visible) {
+        total += getGaussianMeshSplatCount(object);
+      }
+    });
   });
 
   return total;
 }
 
-function getActiveSparkSplatsCount(scene) {
-  let count = null;
-
-  scene.traverse((node) => {
-    if (count !== null || node?.visible === false) {
-      return;
-    }
-
-    const activeSplats = node?.activeSplats;
-    if (
-      Number.isFinite(activeSplats) &&
-      typeof node?.clearSplats === 'function' &&
-      typeof node?.render === 'function'
-    ) {
-      count = activeSplats;
-    }
-  });
-
-  return count;
+function getActiveGaussianSplatsCount(gaussianSplatRenderer) {
+  const count = gaussianSplatRenderer?.activeSplats;
+  return Number.isFinite(count) ? count : null;
 }
 
 export function createRuntimeStats({
   cacheBytesValueEl,
-  getScene,
+  fpsValueEl,
+  getGaussianSplatRenderer,
   getTiles,
   hasGaussianSplats,
   splatsCountValueEl,
@@ -71,8 +54,37 @@ export function createRuntimeStats({
   tilesVisibleValueEl,
 }) {
   let lastUpdateTime = -Infinity;
+  let fpsSampleStart = null;
+  let renderedFrames = 0;
 
   return {
+    markRenderIdle() {
+      fpsSampleStart = null;
+      renderedFrames = 0;
+      if (fpsValueEl) {
+        fpsValueEl.textContent = '0';
+      }
+    },
+    recordRenderedFrame(time = performance.now()) {
+      if (!fpsValueEl) {
+        return;
+      }
+
+      if (fpsSampleStart === null) {
+        fpsSampleStart = time;
+      }
+      renderedFrames += 1;
+
+      const elapsed = time - fpsSampleStart;
+      if (elapsed < FPS_UPDATE_INTERVAL_MS) {
+        return;
+      }
+
+      const fps = (renderedFrames * 1000) / elapsed;
+      fpsValueEl.textContent = fps >= 10 ? Math.round(fps) : fps.toFixed(1);
+      fpsSampleStart = time;
+      renderedFrames = 0;
+    },
     update(force = false) {
       if (
         !cacheBytesValueEl ||
@@ -101,11 +113,11 @@ export function createRuntimeStats({
       const visibleTiles =
         tiles?.visibleTiles?.size ?? tilesStats?.visible ?? 0;
       const includeSplats = hasGaussianSplats();
-      const activeSparkSplats = includeSplats
-        ? getActiveSparkSplatsCount(getScene())
+      const activeGaussianSplats = includeSplats
+        ? getActiveGaussianSplatsCount(getGaussianSplatRenderer())
         : null;
       const splatCount = includeSplats
-        ? (activeSparkSplats ?? getLoadedGaussianSplatCount(tiles))
+        ? (activeGaussianSplats ?? getLoadedGaussianSplatCount(tiles))
         : 0;
 
       cacheBytesValueEl.textContent = formatBytes(cacheBytes);

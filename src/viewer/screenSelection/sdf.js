@@ -4,7 +4,7 @@ import {
   SplatEditRgbaBlendMode,
   SplatEditSdf,
   SplatEditSdfType,
-} from '@sparkjsdev/spark';
+} from 'gaussian-splat-lite';
 
 import {
   SCREEN_SELECTION_EXCLUDE_COLOR,
@@ -100,8 +100,8 @@ export function setScreenSelectionEditSelection(edit, selection, style) {
   edit.clear();
   edit.invert = !!selection;
   edit.rgbaBlendMode = hidden
-    ? SplatEditRgbaBlendMode.MULTIPLY
-    : SplatEditRgbaBlendMode.SET_RGB;
+    ? SplatEditRgbaBlendMode.MULTIPLY_RGBA
+    : SplatEditRgbaBlendMode.SET_RGBA;
   if (!selection) {
     return;
   }
@@ -120,7 +120,9 @@ export function setScreenSelectionEditSelection(edit, selection, style) {
       sdf.opacity = SCREEN_SELECTION_HIDDEN_ALPHA;
     } else {
       sdf.color.copy(SCREEN_SELECTION_EXCLUDE_COLOR);
-      sdf.opacity = 1;
+      // Preview edits run after confirmed crop edits. Leave alpha unassigned so
+      // the yellow preview cannot make splats hidden by an earlier edit visible.
+      sdf.opacity = undefined;
     }
     edit.add(sdf);
   });
@@ -131,8 +133,8 @@ export function createScreenSelectionEdit({ style, hidden, name }) {
   return new SplatEdit({
     name,
     rgbaBlendMode: isHidden
-      ? SplatEditRgbaBlendMode.MULTIPLY
-      : SplatEditRgbaBlendMode.SET_RGB,
+      ? SplatEditRgbaBlendMode.MULTIPLY_RGBA
+      : SplatEditRgbaBlendMode.SET_RGBA,
     sdfSmooth: 0,
     softEdge: 0,
     invert: false,

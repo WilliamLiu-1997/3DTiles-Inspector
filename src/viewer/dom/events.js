@@ -8,6 +8,7 @@ export function bindViewerEvents({
   getGlobeTiles,
   getTerrainEnabled,
   getTiles,
+  gaussianSplatRenderer,
   handlers,
   ktx2Loader,
   renderer,
@@ -29,6 +30,7 @@ export function bindViewerEvents({
     moveCameraToCoordinateButton,
     moveTilesToCoordinateButton,
     moveToTilesButton,
+    renderOnDemandToggle,
     resetButton,
     rotateButton,
     saveButton,
@@ -42,6 +44,10 @@ export function bindViewerEvents({
 
   let uniformScaleTrackPointerId = null;
   let keepSphereRadiusTrackPointerId = null;
+
+  function requestRender() {
+    handlers.requestRender?.();
+  }
 
   function setUniformScaleStatus() {
     setStatus(
@@ -62,6 +68,7 @@ export function bindViewerEvents({
         ? 'Translate mode enabled.'
         : 'Translate mode disabled.',
     );
+    requestRender();
   });
   rotateButton.addEventListener('click', () => {
     handlers.cancelPositionPickModes();
@@ -71,6 +78,7 @@ export function bindViewerEvents({
         ? 'Rotate mode enabled.'
         : 'Rotate mode disabled.',
     );
+    requestRender();
   });
   uniformScaleTrackEl.addEventListener('pointerdown', (event) => {
     if (
@@ -102,6 +110,7 @@ export function bindViewerEvents({
     }
 
     updateUniformScaleFromTrackPointer(event);
+    requestRender();
   });
   uniformScaleTrackEl.addEventListener('pointerup', (event) => {
     if (event.pointerId !== uniformScaleTrackPointerId) {
@@ -199,6 +208,7 @@ export function bindViewerEvents({
     }
 
     handlers.setKeepSphereRadiusFromTrackClientX(event.clientX);
+    requestRender();
   });
   keepSphereRadiusTrackEl.addEventListener('pointerup', (event) => {
     if (event.pointerId !== keepSphereRadiusTrackPointerId) {
@@ -256,6 +266,9 @@ export function bindViewerEvents({
     'click',
     handlers.toggleToolbarVisibility,
   );
+  renderOnDemandToggle.addEventListener('change', () => {
+    handlers.setRenderOnDemand(renderOnDemandToggle.checked);
+  });
   terrainButton.addEventListener('click', () => {
     if (!handlers.setTerrainEnabled(!getTerrainEnabled())) {
       return;
@@ -266,9 +279,13 @@ export function bindViewerEvents({
         : 'Terrain disabled. Using ellipsoid imagery globe.',
     );
   });
-  boundingVolumeButton.addEventListener('click', handlers.toggleBoundingVolume);
+  boundingVolumeButton.addEventListener('click', () => {
+    handlers.toggleBoundingVolume();
+    requestRender();
+  });
   geometricErrorScaleInput.addEventListener('input', () => {
     geometricError.setScaleExponent(geometricErrorScaleInput.value);
+    requestRender();
   });
   geometricErrorScaleInput.addEventListener('change', () => {
     setStatus(
@@ -279,6 +296,7 @@ export function bindViewerEvents({
   });
   geometricErrorLayerScaleInput.addEventListener('input', () => {
     geometricError.setLayerScaleExponent(geometricErrorLayerScaleInput.value);
+    requestRender();
   });
   geometricErrorLayerScaleInput.addEventListener('change', () => {
     setStatus(
@@ -296,32 +314,48 @@ export function bindViewerEvents({
     'click',
     handlers.moveTilesToCoordinate,
   );
-  setPositionButton.addEventListener('click', handlers.toggleSetPositionMode);
+  setPositionButton.addEventListener('click', () => {
+    handlers.toggleSetPositionMode();
+    requestRender();
+  });
   resetButton.addEventListener('click', handlers.resetToSaved);
-  saveButton.addEventListener('click', handlers.saveTransform);
+  saveButton.addEventListener('click', () => {
+    handlers.saveTransform();
+    requestRender();
+  });
   renderer.domElement.addEventListener('pointerdown', (event) => {
     if (handlers.handleScreenSelectionPointerDown(event)) {
+      requestRender();
       return;
     }
     handlers.handleSetPositionPointerDown(event);
+    requestRender();
   });
   renderer.domElement.addEventListener('pointermove', (event) => {
     if (handlers.handleScreenSelectionPointerMove(event)) {
+      requestRender();
       return;
     }
     handlers.handleSetPositionPointerMove(event);
+    if (event.buttons) {
+      requestRender();
+    }
   });
   renderer.domElement.addEventListener('pointerup', (event) => {
     if (handlers.handleScreenSelectionPointerUp(event)) {
+      requestRender();
       return;
     }
     handlers.handleSetPositionPointerUp(event);
+    requestRender();
   });
   renderer.domElement.addEventListener('pointercancel', (event) => {
     if (handlers.handleScreenSelectionPointerCancel(event)) {
+      requestRender();
       return;
     }
     handlers.handleSetPositionPointerCancel(event);
+    requestRender();
   });
 
   window.addEventListener('resize', () => {
@@ -330,11 +364,17 @@ export function bindViewerEvents({
     camera.updateProjectionMatrix();
     getTiles()?.setResolutionFromRenderer(camera, renderer);
     getGlobeTiles()?.setResolutionFromRenderer(camera, renderer);
+    requestRender();
   });
 
   window.addEventListener('pagehide', handlers.requestViewerShutdown);
   window.addEventListener('beforeunload', () => {
+    handlers.disposeRenderLoop?.();
     handlers.requestViewerShutdown();
+    getTiles()?.dispose();
+    getGlobeTiles()?.dispose();
+    gaussianSplatRenderer.removeFromParent();
+    gaussianSplatRenderer.dispose();
     cameraController.dispose();
     dracoLoader.dispose();
     ktx2Loader.dispose();

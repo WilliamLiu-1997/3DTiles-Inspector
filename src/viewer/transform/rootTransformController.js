@@ -8,13 +8,11 @@ import {
   refreshSavedRootMatrix,
   resetEditableObjectTransform,
   setSavedRootMatrixFromTransform,
-  updateTilesRendererGroupMatrices,
 } from './tilesetTransform.js';
 
 export function createRootTransformController({
   editableGroup,
   geoCamera,
-  getTiles,
   rootTilesetLabel,
   transformControlsHelper,
   transformHandle,
@@ -32,7 +30,6 @@ export function createRootTransformController({
   let savedRootMatrixPromise = Promise.resolve();
   let savedRootMatrixLoadError = null;
   let syncingTransformHandle = false;
-  let tilesTransformDirty = false;
 
   function getCurrentRootTransform(target) {
     return getRootTransform({
@@ -71,10 +68,7 @@ export function createRootTransformController({
   }
 
   function invalidate() {
-    tilesTransformDirty = true;
-    editableGroup.updateMatrixWorld(true);
-    const tiles = getTiles();
-    updateTilesRendererGroupMatrices(tiles);
+    // Each caller just used composeMatrix, which already refreshed this subtree.
     onTransformsInvalidated?.();
     transformControlsHelper?.updateMatrixWorld(true);
   }
@@ -106,7 +100,6 @@ export function createRootTransformController({
         transformHandle,
         getCurrentRootTransform(currentRootTransformMatrix),
       );
-      transformHandle.updateMatrixWorld(true);
       transformControlsHelper?.updateMatrixWorld(true);
     } finally {
       syncingTransformHandle = false;
@@ -177,7 +170,6 @@ export function createRootTransformController({
     resetEditableObjectTransform(editableGroup);
     lastSavedMatrix.identity();
     resetEditableObjectTransform(transformHandle);
-    tilesTransformDirty = true;
     notifyUniformScaleChanged();
   }
 
@@ -241,22 +233,11 @@ export function createRootTransformController({
     return getIncrementalMatrix(currentMatrix, lastSavedMatrix);
   }
 
-  function flush() {
-    if (!tilesTransformDirty) {
-      return;
-    }
-    tilesTransformDirty = false;
-    editableGroup.updateMatrixWorld(true);
-    const tiles = getTiles();
-    updateTilesRendererGroupMatrices(tiles);
-  }
-
   return {
     applyFromCoordinate,
     applyFromRootTransform,
     applySaved,
     applyUniformScale,
-    flush,
     getCurrentMatrix,
     getCurrentRootTransform,
     getCurrentRootTransformArray,
@@ -265,9 +246,6 @@ export function createRootTransformController({
     getLoadError: () => savedRootMatrixLoadError,
     getUniformScale,
     isSyncingHandle: () => syncingTransformHandle,
-    markDirty() {
-      tilesTransformDirty = true;
-    },
     markSaved,
     refresh,
     reloadFromUrl,

@@ -5,8 +5,6 @@ export function applySavedObjectMatrix(object, matrix) {
 }
 
 export function getObjectMatrix(object) {
-  object.updateMatrix();
-  object.updateMatrixWorld(true);
   return object.matrix.clone();
 }
 
@@ -21,8 +19,6 @@ export function getRootTransform({
   savedRootMatrix,
   target,
 }) {
-  editableGroup.updateMatrix();
-  editableGroup.updateMatrixWorld(true);
   return target
     .copy(editableGroup.matrix)
     .multiply(savedRootInverseMatrix.copy(lastSavedMatrix).invert())
@@ -44,26 +40,10 @@ export function applyEditableMatrixFromRootTransform({
   composeMatrix(editableGroup, target);
 }
 
-export function updateTilesRendererGroupMatrices(tilesRenderer) {
-  const group = tilesRenderer?.group;
-  if (!group) {
-    return;
+export function markWorldMatricesDirty(objects) {
+  for (const object of objects) {
+    object.matrixWorldNeedsUpdate = true;
   }
-
-  group.updateMatrixWorld(true);
-
-  if (typeof tilesRenderer.forEachLoadedModel !== 'function') {
-    return;
-  }
-
-  tilesRenderer.forEachLoadedModel((loadedScene) => {
-    if (typeof loadedScene.updateWorldMatrix === 'function') {
-      // Three.js r185 only recomputes clean, static matrices when forced.
-      loadedScene.updateWorldMatrix(false, true, true);
-    } else {
-      loadedScene.updateMatrixWorld(true);
-    }
-  });
 }
 
 export function resetEditableObjectTransform(object) {

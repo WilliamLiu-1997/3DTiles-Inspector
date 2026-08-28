@@ -1,38 +1,84 @@
 const assert = require('assert');
 const fs = require('fs');
+const zlib = require('zlib');
 
 const GLB_MAGIC = 0x46546c67;
 const GLB_VERSION = 2;
 const GLB_JSON_CHUNK_TYPE = 0x4e4f534a;
 const GLB_BIN_CHUNK_TYPE = 0x004e4942;
 const SQRT_HALF = Math.SQRT1_2;
+const SPZ_MAGIC = 0x5053474e;
+const SPZ_VERSION = 3;
+const SPZ_FRACTIONAL_BITS = 12;
+const SPZ_FLAGS = 0;
+const SPZ_POSITION_STRIDE = 9;
+const SPZ_BYTES_PER_SPLAT = 20;
+const SPZ_COMPRESSION_LEVEL = 6;
 
-async function createSpzBytes(points) {
-  const { SpzWriter } = await import('@sparkjsdev/spark');
-  const writer = new SpzWriter({
-    numSplats: points.length,
-    shDegree: 0,
-  });
-
-  points.forEach(([x, y, z], index) => {
-    writer.setCenter(index, x, y, z);
-    writer.setAlpha(index, 1);
-    writer.setRgb(index, 1, 1, 1);
-    writer.setScale(index, 0, 0, 0);
-    writer.setQuat(index, 0, 0, 0, 1);
-  });
-
-  return Buffer.from(await writer.finalize());
+function writeInt24LE(buffer, offset, value) {
+  if (value < -0x800000 || value > 0x7fffff) {
+    throw new RangeError('SPZ fixture position exceeds signed 24-bit range.');
+  }
+  buffer.writeIntLE(value, offset, 3);
 }
 
-async function readSpzCenters(bytes) {
-  const { SpzReader } = await import('@sparkjsdev/spark');
-  const reader = new SpzReader({ fileBytes: bytes });
-  await reader.parseHeader();
-  const centers = [];
-  await reader.parseSplats((index, x, y, z) => {
-    centers[index] = { x, y, z };
+function createSpzBytes(points) {
+  const raw = Buffer.alloc(16 + points.length * SPZ_BYTES_PER_SPLAT);
+  raw.writeUInt32LE(SPZ_MAGIC, 0);
+  raw.writeUInt32LE(SPZ_VERSION, 4);
+  raw.writeUInt32LE(points.length, 8);
+  raw.writeUInt8(0, 12);
+  raw.writeUInt8(SPZ_FRACTIONAL_BITS, 13);
+  raw.writeUInt8(SPZ_FLAGS, 14);
+
+  const opacityOffset = 16 + points.length * SPZ_POSITION_STRIDE;
+  const colorOffset = opacityOffset + points.length;
+  const scaleOffset = colorOffset + points.length * 3;
+  const quaternionOffset = scaleOffset + points.length * 3;
+  const fixedScale = 2 ** SPZ_FRACTIONAL_BITS;
+
+  points.forEach((point, index) => {
+    if (
+      !Array.isArray(point) ||
+      point.length !== 3 ||
+      point.some((value) => !Number.isFinite(value))
+    ) {
+      throw new TypeError('SPZ fixture positions must be finite xyz arrays.');
+    }
+    const positionOffset = 16 + index * SPZ_POSITION_STRIDE;
+    point.forEach((value, component) => {
+      writeInt24LE(
+        raw,
+        positionOffset + component * 3,
+        Math.round(value * fixedScale),
+      );
+    });
+    raw[opacityOffset + index] = 0xff;
+    raw.fill(0xc3, colorOffset + index * 3, colorOffset + (index + 1) * 3);
+    raw[quaternionOffset + index * 4 + 3] = 0xc0;
   });
+
+  return zlib.gzipSync(raw, {
+    level: SPZ_COMPRESSION_LEVEL,
+    memLevel: 9,
+  });
+}
+
+function readSpzCenters(bytes) {
+  const raw = zlib.gunzipSync(bytes);
+  assert.strictEqual(raw.readUInt32LE(0), SPZ_MAGIC);
+  assert.strictEqual(raw.readUInt32LE(4), SPZ_VERSION);
+  const count = raw.readUInt32LE(8);
+  const fixedScale = 2 ** raw.readUInt8(13);
+  const centers = new Array(count);
+  for (let index = 0; index < count; index++) {
+    const offset = 16 + index * SPZ_POSITION_STRIDE;
+    centers[index] = {
+      x: raw.readIntLE(offset, 3) / fixedScale,
+      y: raw.readIntLE(offset + 3, 3) / fixedScale,
+      z: raw.readIntLE(offset + 6, 3) / fixedScale,
+    };
+  }
   return centers;
 }
 

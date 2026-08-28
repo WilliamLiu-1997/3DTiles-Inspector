@@ -154,24 +154,18 @@ export function createInspectorTilesRenderer({
   ktxLoader,
   preprocessURL,
   renderer,
-  scene,
   showBoundingVolume,
   tilePreprocess,
   url,
 }) {
   const tiles = new TilesRenderer(url);
-  tiles.downloadQueue.maxJobs = 8;
+  tiles.downloadQueue.maxJobs = 4;
   tiles.parseQueue.maxJobs = 4;
   tiles.registerPlugin(new TilesFadePlugin());
   tiles.registerPlugin(new TileCompressionPlugin());
   tiles.registerPlugin(new ImplicitTilingPlugin());
   tiles.registerPlugin(createGeometricErrorLayerScalePlugin(tilePreprocess));
-  tiles.registerPlugin(
-    new GaussianSplatPlugin({
-      renderer,
-      scene,
-    }),
-  );
+  tiles.registerPlugin(new GaussianSplatPlugin());
 
   const debugTilesPlugin = new DebugTilesPlugin({
     displayBoxBounds: showBoundingVolume,

@@ -11,6 +11,7 @@ import {
   Vector2,
   Vector3,
 } from 'three';
+import { SplatMesh } from 'gaussian-splat-lite';
 import {
   SCREEN_SELECTION_ACTION_EXCLUDE,
   SCREEN_SELECTION_ACTION_INCLUDE,
@@ -165,7 +166,7 @@ function createKeepSphereWireframeMaterial({ depthTest, opacity = 1 }) {
 function isGaussianSplatObject(object) {
   let current = object;
   while (current) {
-    if (current.userData?.gaussianSplat) {
+    if (current instanceof SplatMesh) {
       return true;
     }
     current = current.parent;
@@ -182,6 +183,7 @@ export function createCropController({
   scene,
   screenSelectionSplatEdit,
   reversedDepthBuffer,
+  onSceneChanged,
   setStatus,
   setTransformMode,
   syncTransformControlsState,
@@ -635,6 +637,7 @@ export function createCropController({
         selection.id === activeSelectionId,
       );
     });
+    onSceneChanged?.();
   }
 
   function syncEditSdfs() {
