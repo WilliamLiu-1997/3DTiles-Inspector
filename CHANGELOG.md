@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-31
+
+### Changed
+
+- Updated `3d-tiles-rendererjs-3dgs-plugin` from `0.2.1` to `0.2.2` and
+  `gaussian-splat-lite` from `0.1.7` to `0.1.13`.
+
 ## [0.3.0] - 2026-08-28
 
 ### Added
