@@ -46,6 +46,23 @@ export function markWorldMatricesDirty(objects) {
   }
 }
 
+export function repairTilesGroupChildMatrices(tilesRenderer) {
+  const group = tilesRenderer?.group;
+  if (!group) {
+    return;
+  }
+
+  for (const child of group.children) {
+    // TilesFadePlugin can keep a fading scene in the group's children after
+    // setTileActive(false) clears its parent. Restore the Three.js hierarchy
+    // invariant before rendering so the scene inherits the edited root matrix.
+    if (child.parent !== group) {
+      child.parent = group;
+      child.updateMatrixWorld(true);
+    }
+  }
+}
+
 export function resetEditableObjectTransform(object) {
   object.position.set(0, 0, 0);
   object.quaternion.identity();

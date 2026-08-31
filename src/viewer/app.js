@@ -26,7 +26,10 @@ import { createFlyToController } from './navigation/flyTo.js';
 import { createCameraUrlPoseController } from './navigation/cameraUrlPose.js';
 import { createCropController } from './screenSelection/cropController.js';
 import { createRootTransformController } from './transform/rootTransformController.js';
-import { markWorldMatricesDirty } from './transform/tilesetTransform.js';
+import {
+  markWorldMatricesDirty,
+  repairTilesGroupChildMatrices,
+} from './transform/tilesetTransform.js';
 import { createTransformModeController } from './transform/transformModeController.js';
 import {
   DEFAULT_ERROR_TARGET,
@@ -759,6 +762,7 @@ function renderFrame(time = performance.now()) {
   updateCameraFarForMode();
   globeController.update();
   tiles?.update();
+  repairTilesGroupChildMatrices(tiles);
   renderer.render(scene, camera);
   runtimeStats.recordRenderedFrame(time);
   runtimeStats.update();

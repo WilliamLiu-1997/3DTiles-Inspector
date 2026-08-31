@@ -1404,6 +1404,7 @@ async function assertLoadedTileSceneMatricesRefresh(tempDir) {
     getObjectMatrix,
     getRootTransform,
     markWorldMatricesDirty,
+    repairTilesGroupChildMatrices,
   } = require(tilesetTransformBundlePath);
   const { Group, Matrix4 } = require('three');
   const { TilesGroup } = await import(
@@ -1421,6 +1422,7 @@ async function assertLoadedTileSceneMatricesRefresh(tempDir) {
   };
   const editableGroup = new Group();
   const tilesGroup = new TilesGroup(tilesRenderer);
+  tilesRenderer.group = tilesGroup;
   const loadedScene = new Group();
   const loadedChild = new Group();
   const detachedScene = new Group();
@@ -1460,6 +1462,19 @@ async function assertLoadedTileSceneMatricesRefresh(tempDir) {
   detachedChild.updateWorldMatrix(true, false);
   assert.strictEqual(detachedScene.matrixWorld.elements[12], 21);
   assert.strictEqual(detachedChild.matrixWorld.elements[12], 54);
+
+  // TilesFadePlugin can leave a fading scene in group.children while the
+  // renderer's inactive transition clears scene.parent. Without repairing the
+  // parent, a root edit makes the fading tile snap back to its local transform.
+  detachedScene.parent = null;
+  editableGroup.position.set(100, 0, 0);
+  editableGroup.updateMatrixWorld(true);
+  detachedScene.updateMatrixWorld(true);
+  assert.strictEqual(detachedScene.matrixWorld.elements[12], 7);
+  repairTilesGroupChildMatrices(tilesRenderer);
+  assert.strictEqual(detachedScene.parent, tilesGroup);
+  assert.strictEqual(detachedScene.matrixWorld.elements[12], 121);
+  assert.strictEqual(detachedChild.matrixWorld.elements[12], 154);
 
   const transformReadGroup = new Group();
   let transformReadWorldUpdates = 0;
@@ -1607,11 +1622,11 @@ async function assertCameraMovementLimitsTileQueues(tempDir) {
   };
   const dispatch = (type) => listeners.get(type)?.();
   const firstTiles = {
-    downloadQueue: { maxJobs: 8 },
+    downloadQueue: { maxJobsPerOrigin: 8 },
     parseQueue: { maxJobs: 4 },
   };
   const secondTiles = {
-    downloadQueue: { maxJobs: 6 },
+    downloadQueue: { maxJobsPerOrigin: 6 },
     parseQueue: { maxJobs: 3 },
   };
   const queueController = createCameraMovementTileQueueController({
@@ -1619,28 +1634,28 @@ async function assertCameraMovementLimitsTileQueues(tempDir) {
     restoreDelayMs: 10,
   });
 
-  assert.strictEqual(CAMERA_MOVEMENT_QUEUE_MAX_JOBS, 2);
+  assert.strictEqual(CAMERA_MOVEMENT_QUEUE_MAX_JOBS, 1);
   assert.strictEqual(CAMERA_MOVEMENT_QUEUE_RESTORE_DELAY_MS, 250);
   queueController.setTiles(firstTiles);
   dispatch('start');
-  assert.strictEqual(firstTiles.downloadQueue.maxJobs, 2);
-  assert.strictEqual(firstTiles.parseQueue.maxJobs, 2);
+  assert.strictEqual(firstTiles.downloadQueue.maxJobsPerOrigin, 1);
+  assert.strictEqual(firstTiles.parseQueue.maxJobs, 1);
 
   dispatch('finish');
   dispatch('start');
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.strictEqual(firstTiles.downloadQueue.maxJobs, 2);
-  assert.strictEqual(firstTiles.parseQueue.maxJobs, 2);
+  assert.strictEqual(firstTiles.downloadQueue.maxJobsPerOrigin, 1);
+  assert.strictEqual(firstTiles.parseQueue.maxJobs, 1);
 
   queueController.setTiles(secondTiles);
-  assert.strictEqual(firstTiles.downloadQueue.maxJobs, 8);
+  assert.strictEqual(firstTiles.downloadQueue.maxJobsPerOrigin, 8);
   assert.strictEqual(firstTiles.parseQueue.maxJobs, 4);
-  assert.strictEqual(secondTiles.downloadQueue.maxJobs, 2);
-  assert.strictEqual(secondTiles.parseQueue.maxJobs, 2);
+  assert.strictEqual(secondTiles.downloadQueue.maxJobsPerOrigin, 1);
+  assert.strictEqual(secondTiles.parseQueue.maxJobs, 1);
 
   dispatch('finish');
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.strictEqual(secondTiles.downloadQueue.maxJobs, 6);
+  assert.strictEqual(secondTiles.downloadQueue.maxJobsPerOrigin, 6);
   assert.strictEqual(secondTiles.parseQueue.maxJobs, 3);
   queueController.dispose();
   assert.strictEqual(listeners.size, 0);

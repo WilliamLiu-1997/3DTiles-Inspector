@@ -1,5 +1,13 @@
 import { TilesRenderer } from '3d-tiles-renderer';
-import { LRUCache, PriorityQueue } from '3d-tiles-renderer/core';
+import {
+  DEFAULT_DOWNLOAD_QUEUE,
+  DEFAULT_LRU_CACHE,
+  DEFAULT_NODE_QUEUE,
+  DEFAULT_PARSE_QUEUE,
+  DownloadPriorityQueue,
+  LRUCache,
+  PriorityQueue,
+} from '3d-tiles-renderer/core';
 import { ImplicitTilingPlugin } from '3d-tiles-renderer/core/plugins';
 import {
   CesiumIonAuthPlugin,
@@ -26,6 +34,8 @@ const CESIUM_ION_TERRAIN = {
 
 export const DEFAULT_ERROR_TARGET = 16;
 const DEFAULT_TERRAIN_ERROR_TARGET = 16;
+const DOWNLOAD_QUEUE_MAX_JOBS_PER_ORIGIN = 4;
+const PARSE_QUEUE_MAX_JOBS = 4;
 
 function createSatelliteOverlay(preprocessURL, downloadQueue) {
   const overlay = new XYZTilesOverlay({
@@ -41,27 +51,34 @@ function createSatelliteOverlay(preprocessURL, downloadQueue) {
   return overlay;
 }
 
+function configureTileQueues(tiles) {
+  const downloadQueue = new DownloadPriorityQueue();
+  downloadQueue.priorityCallback = DEFAULT_DOWNLOAD_QUEUE.priorityCallback;
+  downloadQueue.maxJobsPerOrigin = DOWNLOAD_QUEUE_MAX_JOBS_PER_ORIGIN;
+
+  const parseQueue = new PriorityQueue();
+  parseQueue.priorityCallback = DEFAULT_PARSE_QUEUE.priorityCallback;
+  parseQueue.maxJobs = PARSE_QUEUE_MAX_JOBS;
+
+  tiles.downloadQueue = downloadQueue;
+  tiles.parseQueue = parseQueue;
+}
+
 function configureGlobeTilesResources(tiles) {
+  configureTileQueues(tiles);
+
   const lruCache = new LRUCache();
-  lruCache.unloadPriorityCallback = tiles.lruCache.unloadPriorityCallback;
+  lruCache.unloadPriorityCallback = DEFAULT_LRU_CACHE.unloadPriorityCallback;
   lruCache.minSize = 256;
   lruCache.maxSize = 1024;
   lruCache.minBytesSize = 2 ** 30 / 8;
   lruCache.maxBytesSize = 2 ** 30 / 2;
 
-  const downloadQueue = new PriorityQueue();
-  downloadQueue.priorityCallback = tiles.downloadQueue.priorityCallback;
-
-  const parseQueue = new PriorityQueue();
-  parseQueue.priorityCallback = tiles.parseQueue.priorityCallback;
-
   const processNodeQueue = new PriorityQueue();
-  processNodeQueue.priorityCallback = tiles.processNodeQueue.priorityCallback;
-  processNodeQueue.maxJobs = tiles.processNodeQueue.maxJobs;
+  processNodeQueue.priorityCallback = DEFAULT_NODE_QUEUE.priorityCallback;
+  processNodeQueue.maxJobs = DEFAULT_NODE_QUEUE.maxJobs;
 
   tiles.lruCache = lruCache;
-  tiles.downloadQueue = downloadQueue;
-  tiles.parseQueue = parseQueue;
   tiles.processNodeQueue = processNodeQueue;
 }
 
@@ -84,8 +101,6 @@ export function createImageryGlobeTiles(options) {
     options.preprocessURL,
     next.downloadQueue,
   );
-  next.downloadQueue.maxJobs = 8;
-  next.parseQueue.maxJobs = 2;
   next.registerPlugin(
     new GeneratedSurfacePlugin({
       overlay: satelliteOverlay,
@@ -114,8 +129,6 @@ export function createTerrainGlobeTiles(options) {
     options.preprocessURL,
     next.downloadQueue,
   );
-  next.downloadQueue.maxJobs = 8;
-  next.parseQueue.maxJobs = 2;
   next.registerPlugin(
     new CesiumIonAuthPlugin({
       apiToken,
@@ -159,8 +172,7 @@ export function createInspectorTilesRenderer({
   url,
 }) {
   const tiles = new TilesRenderer(url);
-  tiles.downloadQueue.maxJobs = 4;
-  tiles.parseQueue.maxJobs = 4;
+  configureTileQueues(tiles);
   tiles.registerPlugin(new TilesFadePlugin());
   tiles.registerPlugin(new TileCompressionPlugin());
   tiles.registerPlugin(new ImplicitTilingPlugin());

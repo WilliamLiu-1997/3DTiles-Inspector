@@ -6,6 +6,21 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-31
+
+### Changed
+
+- Updated `3d-tiles-renderer` from `0.5.0` to `0.5.2` and adopted its
+  per-origin download queue API.
+- Set inspected tileset and globe download and parse concurrency to four jobs,
+  reducing inspected tileset download and parse concurrency to one job while
+  the camera is moving and until 250 ms after movement finishes.
+
+### Fixed
+
+- Fixed fading tiles temporarily losing the edited root transform while
+  translate or rotate controls are being dragged.
+
 ## [0.3.2] - 2026-08-31
 
 ### Changed

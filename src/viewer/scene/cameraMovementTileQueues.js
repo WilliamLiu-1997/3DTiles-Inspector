@@ -1,4 +1,4 @@
-export const CAMERA_MOVEMENT_QUEUE_MAX_JOBS = 2;
+export const CAMERA_MOVEMENT_QUEUE_MAX_JOBS = 1;
 export const CAMERA_MOVEMENT_QUEUE_RESTORE_DELAY_MS = 250;
 
 export function createCameraMovementTileQueueController({
@@ -19,17 +19,22 @@ export function createCameraMovementTileQueueController({
   }
 
   function restoreQueues() {
-    savedMaxJobs?.forEach((value, queue) => {
-      queue.maxJobs = value;
+    savedMaxJobs?.forEach(([queue, property, value]) => {
+      queue[property] = value;
     });
     savedMaxJobs = null;
   }
 
   function throttleQueues() {
-    const queues = [tiles?.downloadQueue, tiles?.parseQueue].filter(Boolean);
-    savedMaxJobs = new Map(queues.map((queue) => [queue, queue.maxJobs]));
-    queues.forEach((queue) => {
-      queue.maxJobs = maxJobs;
+    const queues = [
+      [tiles?.downloadQueue, 'maxJobsPerOrigin'],
+      [tiles?.parseQueue, 'maxJobs'],
+    ].filter(([queue]) => Boolean(queue));
+    savedMaxJobs = queues.map(([queue, property]) =>
+      [queue, property, queue[property]],
+    );
+    queues.forEach(([queue, property]) => {
+      queue[property] = maxJobs;
     });
   }
 
