@@ -6,6 +6,13 @@ The format is based on Keep a Changelog and this project follows Semantic Versio
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-31
+
+### Changed
+
+- Updated `gaussian-splat-lite` from `0.1.13` to `0.1.14`, restoring the
+  lower default Gaussian alpha cutoff to reduce visible splat boundaries.
+
 ## [0.3.1] - 2026-08-31
 
 ### Changed

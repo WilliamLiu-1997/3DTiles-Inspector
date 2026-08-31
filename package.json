@@ -1,6 +1,6 @@
 {
   "name": "3dtiles-inspector",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Inspect, align, and save local 3D Tiles root transforms in an interactive browser session.",
   "author": "William Liu <lyz15972107087@gmail.com>",
   "license": "Apache-2.0",
@@ -57,7 +57,7 @@
     "3d-tiles-renderer": "0.5.0",
     "3d-tiles-rendererjs-3dgs-plugin": "0.2.2",
     "esbuild": "^0.25.11",
-    "gaussian-splat-lite": "0.1.13"
+    "gaussian-splat-lite": "0.1.14"
   },
   "dependencies": {
     "three": "0.185.1"
